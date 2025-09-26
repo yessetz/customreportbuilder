@@ -1,0 +1,24 @@
+server:
+  port: 8090
+databricks:
+  host: ${DATABRICKS_HOST:}
+  token: ${DATABRICKS_TOKEN:}
+  warehouseId: ${DATABRICKS_WAREHOUSEID:}
+  httpPath: ${DATABRICKS_HTTPPATH:/sql/1.0/warehouses/${DATABRICKS_WAREHOUSEID:}}
+  connectTimeoutMs: 3000
+  readTimeoutMs: 30000
+
+cache:
+  pageSoze: ${CACHE_PAGE_SIZE:500}
+  redis:
+    host: localhost
+    port: ${REDIS_PORT:6379}
+    ssl: ${REDIS_SSL:false}
+    username:
+    password:
+    timeoutMs: ${REDIS_TIMEOUT_MS:3000}
+    chunkTtlSeconds: ${REDIS_CHUNK_TTL:600}
+
+logging:
+  level:
+    com.mm.customreportbuilder.databricks: DEBUG
