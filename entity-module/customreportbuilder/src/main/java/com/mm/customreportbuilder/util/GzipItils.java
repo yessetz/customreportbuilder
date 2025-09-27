@@ -1,29 +1,31 @@
 package com.mm.customreportbuilder.util;
 
-import java.io.*;
-import java.util.zip.*;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 public final class GzipUtils {
-    private GzipUtils() {
-    }
+    private GzipUtils() {}
 
     public static byte[] gzip(byte[] input) throws IOException {
-        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        try (GZIPOutputStream gzipOutputStream = new GZIPOutputStream(byteArrayOutputStream)) {
-            gzipOutputStream.write(input);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (GZIPOutputStream gos = new GZIPOutputStream(baos)) {
+            gos.write(input);
         }
-        return byteArrayOutputStream.toByteArray();
+        return baos.toByteArray();
     }
-    
-    public static byte[] gunzip(byte[] input) throws IOException {
-        try (GZIPInputStream gzipInputStream = new GZIPInputStream(new ByteArrayInputStream(input));
-             ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
+
+    public static byte[] ungzip(byte[] input) throws IOException {
+        try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(input));
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[8192];
             int read;
-            while ((read = gzipInputStream.read(buffer)) != -1) {
-                byteArrayOutputStream.write(buffer, 0, read);
+            while ((read = gis.read(buf)) != -1) {
+                baos.write(buf, 0, read);
             }
-            return byteArrayOutputStream.toByteArray();
+            return baos.toByteArray();
         }
     }
 }

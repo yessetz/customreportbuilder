@@ -1,21 +1,22 @@
 server:
   port: 8090
+
 databricks:
   host: ${DATABRICKS_HOST:}
   token: ${DATABRICKS_TOKEN:}
   warehouseId: ${DATABRICKS_WAREHOUSEID:}
   httpPath: ${DATABRICKS_HTTPPATH:/sql/1.0/warehouses/${DATABRICKS_WAREHOUSEID:}}
-  connectTimeoutMs: 3000
-  readTimeoutMs: 30000
+  connectTimeoutMs: ${DATABRICKS_TIMEOUT_MS:3000}
+  readTimeoutMs: ${DATABRICKS_READTIMEOUT_MS:30000}
 
 cache:
-  pageSoze: ${CACHE_PAGE_SIZE:500}
+  pageSize: ${CACHE_PAGE_SIZE:500}
   redis:
-    host: localhost
+    host: ${REDIS_HOST:localhost}
     port: ${REDIS_PORT:6379}
     ssl: ${REDIS_SSL:false}
-    username:
-    password:
+    username: ${REDIS_USERNAME:}
+    password: ${REDIS_PASSWORD:}
     timeoutMs: ${REDIS_TIMEOUT_MS:3000}
     chunkTtlSeconds: ${REDIS_CHUNK_TTL:600}
 

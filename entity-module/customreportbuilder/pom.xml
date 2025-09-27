@@ -7,13 +7,18 @@
         <artifactId>entity-module</artifactId>
         <version>7.12-SNAPSHOT</version>
     </parent>
+
     <modelVersion>4.0.0</modelVersion>
     <artifactId>customreportbuilder</artifactId>
     <packaging>jar</packaging>
     <name>customreportbuilder</name>
+
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
         <spring-boot.version>2.7.18</spring-boot.version>
+
+        <!-- Plugin skips already present in parent; keep them explicit for this module -->
         <import.skip>true</import.skip>
         <spotless.apply.skip>true</spotless.apply.skip>
         <spotless.skip>true</spotless.skip>
@@ -23,6 +28,7 @@
         <enforcer.skip>true</enforcer.skip>
         <mdep.analyze.skip>true</mdep.analyze.skip>
     </properties>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -36,79 +42,81 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- Spring Boot -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+
+        <!-- JSON -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
-        <!-- Redis / ElastiCache (Lettuce) -->
+
+        <!-- Redis (Lettuce) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
-        <!-- GZIP helper (optional, for compression) -->
+        <!-- Optional helpers -->
         <dependency>
             <groupId>commons-io</groupId>
             <artifactId>commons-io</artifactId>
             <version>2.15.1</version>
-        </dependency>   
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>${spring-boot.version}</version>
-            </plugin>
-            <plugin>
-                <groupId>net.revelc.code</groupId>
-                <artifactId>impsort-maven-plugin</artifactId>
-                <version>1.9.0</version>
-                <executions>
-                    <execution>
-                        <id>sort-imports</id>
-                        <phase>none</phase>
-                        <goals/>
-                    </execution>
-                </executions>
-            </plugin>
-
+            <!-- Build and embed the Angular UI -->
             <plugin>
                 <groupId>com.github.eirslett</groupId>
                 <artifactId>frontend-maven-plugin</artifactId>
                 <version>1.15.0</version>
+                <configuration>
+                    <!-- UI project lives under this module -->
+                    <workingDirectory>ui</workingDirectory>
+                    <!-- Keep Node tooling isolated in target -->
+                    <installDirectory>${project.build.directory}/node</installDirectory>
+                </configuration>
                 <executions>
                     <execution>
-                        <id>install-node</id>
-                        <goals><goal>install-node-and-npm</goal></goals>
+                        <id>install-node-and-npm</id>
+                        <goals>
+                            <goal>install-node-and-npm</goal>
+                        </goals>
                         <configuration>
                             <nodeVersion>v20.11.0</nodeVersion>
+                            <npmVersion>10.2.4</npmVersion>
+                        </configuration>
                     </execution>
                     <execution>
-                        <id>npm-install</id>
-                        <goals><goal>npm</goal></goals>
+                        <id>npm-ci</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>npm</goal>
+                        </goals>
                         <configuration>
-                            <arguments>install --legacy-peer-deps</arguments>
+                            <arguments>ci --legacy-peer-deps</arguments>
                         </configuration>
                     </execution>
                     <execution>
                         <id>npm-build</id>
-                        <goals><goal>npm</goal></goals>
                         <phase>prepare-package</phase>
+                        <goals>
+                            <goal>npm</goal>
+                        </goals>
                         <configuration>
-                            <arguments>run build --configuration=production</arguments>
+                            <!-- Uses package.json "build" script (ng build) -->
+                            <arguments>run build -- --configuration=production</arguments>
                         </configuration>
                     </execution>
                 </executions>
-                <configuration>
-                    <workingDirectory>ui</workingDirectory>
-                </configuration>
             </plugin>
+
+            <!-- Copy built UI into Spring Boot static resources -->
             <plugin>
                 <artifactId>maven-resources-plugin</artifactId>
                 <version>3.3.1</version>
@@ -116,7 +124,9 @@
                     <execution>
                         <id>copy-ui</id>
                         <phase>prepare-package</phase>
-                        <goals><goal>copy-resources</goal></goals>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
                         <configuration>
                             <outputDirectory>${project.basedir}/src/main/resources/static</outputDirectory>
                             <resources>
@@ -126,6 +136,43 @@
                                 </resource>
                             </resources>
                         </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Clean previously copied UI to avoid stale files -->
+            <plugin>
+                <artifactId>maven-clean-plugin</artifactId>
+                <version>3.3.2</version>
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}/src/main/resources/static</directory>
+                            <includes>
+                                <include>**/*</include>
+                            </includes>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
+
+            <!-- Spring Boot packaging -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+            </plugin>
+
+            <!-- Keep but disabled -->
+            <plugin>
+                <groupId>net.revelc.code</groupId>
+                <artifactId>impsort-maven-plugin</artifactId>
+                <version>1.9.0</version>
+                <executions>
+                    <execution>
+                        <id>sort-imports</id>
+                        <phase>none</phase>
+                        <goals/>
                     </execution>
                 </executions>
             </plugin>

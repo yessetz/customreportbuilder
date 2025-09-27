@@ -1,33 +1,33 @@
 {
-    "name": "customreportbuilder",
-    "version": "1.0.0",
-    "description": "Custom Report Builder UI",
-    "private": true,
-    "type": "module",
-    "scripts": {
-        "start": "ng serve",
-        "build": "ng build",
-        "build:prod": "ng build --configuration production"
-    },
-    "dependencies": {
-        "@angular/common": "^19.2.15",
-        "@angular/core": "^19.2.15",
-        "@angular/forms": "^19.2.15",
-        "@angular/platform-browser": "^19.2.15",
-        "@angular/platform-browser-dynamic": "^19.2.15",
-        "@angular/router": "^19.2.15",
-        "ag-grid-angular": "^34.2.0",
-        "ag-grid-community": "^34.2.0",
-        "rxjs": "~7.8.2",
-        "zone.js": "~0.12.0"
-    },
-    "devDependencies": {
-        "@angular-devkit/build-angular": "^19.2.17",
-        "@angular/cli": "^19.2.17",
-        "@angular/compiler": "^19.2.15",
-        "@angular/compiler-cli": "^19.2.15",
-        "@types/node": "^20.14.10",
-        "typescript": "~5.6.3",
-        "ts": "^2.8.1"
-    }
+  "name": "customreportbuilder",
+  "version": "1.0.0",
+  "description": "Custom Report Builder UI",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "ng serve --proxy-config proxy.conf.json",
+    "build": "ng build",
+    "build:prod": "ng build --configuration production"
+  },
+  "dependencies": {
+    "@angular/common": "^19.2.15",
+    "@angular/core": "^19.2.15",
+    "@angular/forms": "^19.2.15",
+    "@angular/platform-browser": "^19.2.15",
+    "@angular/platform-browser-dynamic": "^19.2.15",
+    "@angular/router": "^19.2.15",
+    "ag-grid-angular": "^34.2.0",
+    "ag-grid-community": "^34.2.0",
+    "rxjs": "~7.8.2",
+    "zone.js": "~0.12.0"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^19.2.17",
+    "@angular/cli": "^19.2.17",
+    "@angular/compiler": "^19.2.15",
+    "@angular/compiler-cli": "^19.2.15",
+    "@types/node": "^20.14.10",
+    "typescript": "~5.6.3",
+    "ts": "^2.8.1"
+  }
 }
