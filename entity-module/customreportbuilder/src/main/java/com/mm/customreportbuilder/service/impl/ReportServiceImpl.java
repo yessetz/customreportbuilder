@@ -103,7 +103,7 @@ public class ReportServiceImpl implements ReportService {
     }
 
     @Override 
-    public void evict(Stirng statementId) {
+    public void evict(String statementId) {
         cache.invalidateStatement("local", statementId);
     }
 }
