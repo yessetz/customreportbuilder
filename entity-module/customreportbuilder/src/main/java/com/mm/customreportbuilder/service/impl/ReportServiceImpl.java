@@ -44,10 +44,10 @@ public class ReportServiceImpl implements ReportService {
         });
 
         return Map.of(
-            "statementId", statementId,
-            "state", "PENDING",
-            "columns", schemaInfo.columnNames(),
-            "schema", schemaInfo.columnMeta()
+                "statementId", statementId,
+                "state", "PENDING",
+                "columns", schemaInfo.columnNames(),
+                "schema", schemaInfo.columnMeta()
         );
     }
 

@@ -2,7 +2,6 @@ package com.mm.customreportbuilder.cache;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -61,11 +60,8 @@ public class ChunkCacheService {
             if (state != null) {
                 meta.put("state", state);
             }
-            stringTemplate.opsForValue().set(
-                metaKey(userId, statementId),
-                mapper.writeValueAsString(meta),
-                ttlSeconds, TimeUnit.SECONDS
-            );
+            stringTemplate.opsForValue().set(metaKey(userId, statementId), mapper.writeValueAsString(meta), ttlSeconds, TimeUnit.SECONDS);
+
         } catch (Exception e) {
             throw new RuntimeException("Failed serialize metadata", e);
         }
@@ -83,7 +79,7 @@ public class ChunkCacheService {
         }
     }
 
-    // Store rows as List<List<Object>> for fast transport to UI
+    // Store rows as List<List<Object>> for efficient transport
     public void putChunk(String userId, String statementId, int index, List<List<Object>> rows) {
         try {
             byte[] json = mapper.writeValueAsBytes(rows);
@@ -109,17 +105,5 @@ public class ChunkCacheService {
 
     public void invalidateStatement(String userId, String statementId) {
         stringTemplate.delete(metaKey(userId, statementId));
-        // Optionally delete chunks if total row count is known
-        Map<String, Object> meta = getMeta(userId, statementId);
-        if (meta != null) {
-            Integer rowCount = (Integer) meta.get("rowCount");
-            Integer pageSize = (Integer) meta.getOrDefault("pageSize", 500);
-            if (rowCount != null && pageSize != null && pageSize > 0) {
-                int chunks = (rowCount + pageSize - 1) / pageSize;
-                for (int i = 0; i < chunks; i++) {
-                    bytesTemplate.delete(chunkKey(userId, statementId, i));
-                }
-            }
-        }
     }
 }
