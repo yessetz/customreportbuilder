@@ -1,7 +1,7 @@
 import { Component, ViewChild } from '@angular/core';
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { AgGridAngular } from 'ag-grid-angular';
+import { AgGridAngular, AgGridModule } from 'ag-grid-angular';
 import { ColDef, GridOptions, IGetRowsParams } from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
@@ -10,7 +10,7 @@ import { ReportDataService } from './report-data.service';
 @Component({
     selector: 'app-report-grid',
     standalone: true,
-    imports: [NgIf, FormsModule, AgGridAngular],
+    imports: [NgIf, FormsModule, AgGridModule],
     template: `
     <div class="toolbar">
         <textarea [(ngModel)]="sql" rows="3"></textarea>
