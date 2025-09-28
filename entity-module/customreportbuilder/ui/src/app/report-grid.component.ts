@@ -62,7 +62,12 @@ export class ReportGridComponent {
         defaultColDef: { resizable: true, sortable: false, filter: false }
     };
 
-    constructor(private svc: ReportDataService) {}
+    cconstructor(private ds: ReportDataService) {}
+
+    async onGridReady() {
+    this.rowData = await this.ds.runSelectOne();
+    }
+
 
     async run() {
         this.loading = true;

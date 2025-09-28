@@ -1,34 +1,29 @@
-import { Injectable } from '@angular/core';
+// src/app/report-data.service.ts
+import { inject, Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable({ providedIn: 'root' })
 export class ReportDataService {
-  private baseUrl = '/api/reports';
+  private http = inject(HttpClient);
 
-  async submit(sql: string): Promise<any> {
-    const resp = await fetch(`${this.baseUrl}/statement`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sql })
-    });
-    if (!resp.ok) throw new Error(await resp.text());
-    return resp.json();
-  }
+  async runSelectOne() {
+    // 1) submit
+    const submit = await firstValueFrom(
+      this.http.post<{ statementId: string }>(
+        '/api/reports/submit',
+        { sql: 'SELECT 1 AS demo' } // or via query param depending on your controller
+      )
+    );
 
-  async getMeta(statementId: string): Promise<any> {
-    const resp = await fetch(`${this.baseUrl}/meta?statementId=${encodeURIComponent(statementId)}`);
-    if (!resp.ok) throw new Error(await resp.text());
-    return resp.json();
-  }
+    // 2) (optional) poll meta until SUCCEEDED, then:
+    // 3) fetch first page of rows
+    const rows = await firstValueFrom(
+      this.http.get<{ rows: any[] }>(
+        `/api/reports/rows?statementId=${submit.statementId}&startRow=0&endRow=100`
+      )
+    );
 
-  async getRows(statementId: string, startRow: number, endRow: number): Promise<{ rows: any[]; lastRow: number | null }> {
-    const url = `${this.baseUrl}?statementId=${encodeURIComponent(statementId)}&startRow=${startRow}&endRow=${endRow}`;
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(await resp.text());
-    return resp.json();
-  }
-
-  async evict(statementId: string): Promise<void> {
-    const resp = await fetch(`${this.baseUrl}?statementId=${encodeURIComponent(statementId)}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error(await resp.text());
+    return rows.rows; // shape like [{ demo: 1 }]
   }
 }
