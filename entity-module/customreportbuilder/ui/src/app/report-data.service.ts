@@ -1,34 +1,34 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
-
-export interface ReportMeta {
-    statementId: string;
-    columns?: string[];
-    rowCount?: number;
-    state?: string;
-    pageSize?: number;
-}
 
 @Injectable({ providedIn: 'root' })
 export class ReportDataService {
-    private base = '/api/reports';
+  private baseUrl = '/api/reports';
 
-    constructor(private http: HttpClient) {}
+  async submit(sql: string): Promise<any> {
+    const resp = await fetch(`${this.baseUrl}/statement`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql })
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
 
-    submit(sql: string) {
-        return firstValueFrom(this.http.post<any>(`${this.base}/statement`, { sql }));
-    }
+  async getMeta(statementId: string): Promise<any> {
+    const resp = await fetch(`${this.baseUrl}/meta?statementId=${encodeURIComponent(statementId)}`);
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
 
-    getMeta(statementId: string) {
-        return firstValueFrom(this.http.get<ReportMeta>(`${this.base}/meta`, { params: {statementId}}));
-    }
+  async getRows(statementId: string, startRow: number, endRow: number): Promise<{ rows: any[]; lastRow: number | null }> {
+    const url = `${this.baseUrl}?statementId=${encodeURIComponent(statementId)}&startRow=${startRow}&endRow=${endRow}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
 
-    getRows(statementId: string, startRow: number, endRow: number) {
-        const params = new HttpParams()
-            .set('statementId', statementId)
-            .set('startRow', startRow)
-            .set('endRow', endRow);
-        return firstValueFrom(this.http.get<any>(this.base, { params }));
-    }
+  async evict(statementId: string): Promise<void> {
+    const resp = await fetch(`${this.baseUrl}?statementId=${encodeURIComponent(statementId)}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error(await resp.text());
+  }
 }
