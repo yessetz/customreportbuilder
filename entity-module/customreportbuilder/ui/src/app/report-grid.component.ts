@@ -64,10 +64,10 @@ export class ReportGridComponent {
 
     cconstructor(private ds: ReportDataService) {}
 
-    async onGridReady() {
-    this.rowData = await this.ds.runSelectOne();
+    async loadTest() {
+        if (!this.api) return;
+        this.rowData = await this.ds.runSelectOne();  // shows [{ demo: 1 }]
     }
-
 
     async run() {
         this.loading = true;
