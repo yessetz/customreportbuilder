@@ -2,7 +2,8 @@ package com.mm.customreportbuilder.cache;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import org.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -33,11 +34,11 @@ public class ChunkCacheService {
     }
 
     public void putMeta(
-        String userId, 
-        String statementId, 
-        int pageSize, 
-        Integer rowCount, 
-        List<String> columns, 
+        String userId,
+        String statementId,
+        int pageSize,
+        Integer rowCount,
+        List<String> columns,
         List<Map<String, Object>> schema,
         String state
     ) {
@@ -78,7 +79,8 @@ public class ChunkCacheService {
         }
     }
 
-    public void putChunk(String userId, String statementId, int index, List<Map<String, Object>> rows) {
+    // Store rows as List<List<Object>> for efficient transport
+    public void putChunk(String userId, String statementId, int index, List<List<Object>> rows) {
         try {
             byte[] json = mapper.writeValueAsBytes(rows);
             byte[] gzipped = com.mm.customreportbuilder.util.GzipUtils.gzip(json);
@@ -88,14 +90,14 @@ public class ChunkCacheService {
         }
     }
 
-    public List<Map<String, Object>> getChunk(String userId, String statementId, int index) {
+    public List<List<Object>> getChunk(String userId, String statementId, int index) {
         try {
             byte[] gzipped = bytesTemplate.opsForValue().get(chunkKey(userId, statementId, index));
             if (gzipped == null) {
                 return null;
             }
             byte[] json = com.mm.customreportbuilder.util.GzipUtils.ungzip(gzipped);
-            return (List<List<Object>>) mapper.readValue(json, List.class);
+            return mapper.readValue(json, new TypeReference<List<List<Object>>>() {});
         } catch (Exception e) {
             throw new RuntimeException("Failed deserialize chunk", e);
         }
@@ -103,6 +105,16 @@ public class ChunkCacheService {
 
     public void invalidateStatement(String userId, String statementId) {
         stringTemplate.delete(metaKey(userId, statementId));
+        Map<String, Object> meta = getMeta(userId, statementId);
+        if (meta != null) {
+            Integer rowCount = (Integer) meta.get("rowCount");
+            Integer pageSize = (Integer) meta.getOrDefault("pageSize", 500);
+            if (rowCount != null && pageSize != null && pageSize > 0) {
+                int totalChunks = (rowCount + pageSize - 1) / pageSize;
+                for (int i = 0; i < totalChunks; i++) {
+                    bytesTemplate.delete(chunkKey(userId, statementId, i));
+                }
+            }
+        }
     }
 }
-

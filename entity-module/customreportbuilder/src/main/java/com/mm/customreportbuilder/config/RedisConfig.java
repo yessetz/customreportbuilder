@@ -24,10 +24,10 @@ public class RedisConfig {
     @Value("${REDIS_SSL:false}")
     private boolean ssl;
 
-    @Value("<empty>")
+    @Value("${REDIS_USERNAME:}")
     private String username;
 
-    @Value("<empty>")
+    @Value("${REDIS_PASSWORD:}")
     private String password;
 
     @Value("${REDIS_TIMEOUT_MS:3000}")
@@ -41,12 +41,10 @@ public class RedisConfig {
     @Bean
     public LettuceConnectionFactory redisConnectionFactory(DefaultClientResources resources) {
         RedisStandaloneConfiguration standalone = new RedisStandaloneConfiguration(host, port);
-        standalone.setHostName(host);
-        standalone.setPort(port);
-        if (!username.isBlank()) {
+        if (username != null && !username.isBlank()) {
             standalone.setUsername(username);
         }
-        if (!password.isBlank()) {
+        if (password != null && !password.isBlank()) {
             standalone.setPassword(RedisPassword.of(password));
         }
 
@@ -71,7 +69,7 @@ public class RedisConfig {
         return template;
     }
 
-    @Bean
+    @Bean(name = "redisStringTemplate")
     public RedisTemplate<String, String> redisStringTemplate(LettuceConnectionFactory connectionFactory) {
         RedisTemplate<String, String> template = new RedisTemplate<>();
         template.setConnectionFactory(connectionFactory);

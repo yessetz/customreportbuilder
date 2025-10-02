@@ -1,7 +1,7 @@
 import { Component, ViewChild } from '@angular/core';
 import { NgIf } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { AgGridAngular } from 'ag-grid-angular';
+import { AgGridAngular, AgGridModule } from 'ag-grid-angular';
 import { ColDef, GridOptions, IGetRowsParams } from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
@@ -10,26 +10,28 @@ import { ReportDataService } from './report-data.service';
 @Component({
     selector: 'app-report-grid',
     standalone: true,
-    imports: [NgIf, FormsModule, AgGridAngular],
+    imports: [NgIf, FormsModule, AgGridModule],
     template: `
     <div class="toolbar">
         <textarea [(ngModel)]="sql" rows="3"></textarea>
         <button (click)="run()" [disabled]="loading">Run</button>
         <span *ngIf="meta?.state">State: {{meta?.state}}</span>
-        <span *ngIf="meta?.rowCount !== null"> | Rows: {{meta?.rowCount}}</span>
+        <span *ngIf="meta?.rowCount != null"> | Rows: {{meta?.rowCount}}</span>
     </div>
-    <div class="ag-theme-quartz" sty;e="height: 600px; width: 100%;">
+    <div class="ag-theme-quartz" style="height: 600px; width: 100%;">
         <ag-grid-angular [gridOptions]="gridOptions"></ag-grid-angular>
     </div>
     `,
     styles: [`
-        .toolbar {display: flex; gap: 10px; margin-bottom: 10px;} textarea {flex: 1}`]
+        .toolbar {display: flex; gap: 10px; margin-bottom: 10px;} textarea {flex: 1}
+    `]
 })
 export class ReportGridComponent {
     @ViewChild(AgGridAngular) grid!: AgGridAngular;
-    sql = 'SELECT * FROM external_analytics_dev.pm_dim_db_ready';
+
+    sql = 'SELECT 1';
     meta: any;
-    statementId: = '';
+    statementId: string = '';
     columns: string[] = [];
     loading = false;
 
@@ -46,7 +48,7 @@ export class ReportGridComponent {
                 }
                 try {
                     const resp = await this.svc.getRows(this.statementId, params.startRow, params.endRow);
-                    const rows = resp.rows.map((r: any[]) => {
+                    const rows = (resp.rows as any[]).map((r: any[]) => {
                         const o: any = {};
                         this.columns.forEach((c, i) => o[c] = r[i]);
                         return o;
@@ -60,7 +62,12 @@ export class ReportGridComponent {
         defaultColDef: { resizable: true, sortable: false, filter: false }
     };
 
-    constructor(private svc: ReportDataService) {}
+    cconstructor(private ds: ReportDataService) {}
+
+    async loadTest() {
+        if (!this.api) return;
+        this.rowData = await this.ds.runSelectOne();  // shows [{ demo: 1 }]
+    }
 
     async run() {
         this.loading = true;
@@ -68,7 +75,7 @@ export class ReportGridComponent {
         this.statementId = submit.statementId;
         this.meta = submit;
         this.columns = submit.columns || [];
-        
+
         this.setCols();
         this.pollMeta();
         this.grid.api.setGridOption('datasource', this.gridOptions.datasource!);

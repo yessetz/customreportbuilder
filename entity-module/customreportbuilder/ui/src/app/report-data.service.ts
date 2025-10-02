@@ -1,34 +1,18 @@
-import { Injectable } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { Injectable, inject } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-
-export interface ReportMeta {
-    statementId: string;
-    columns?: string[];
-    rowCount?: number;
-    state?: string;
-    pageSize?: number;
-}
 
 @Injectable({ providedIn: 'root' })
 export class ReportDataService {
-    private base = '/api/reports';
+  private http = inject(HttpClient);
 
-    constructor(private http: HttpClient) {}
-
-    submit(sql: string) {
-        return firstValueFrom(this.http.post<any>(`${this.base}/statement`, { sql }));
-    }
-
-    getMeta(statementId: string) {
-        return firstValueFrom(this.http.get<ReportMeta>(`${this.base}/meta`, { params: {statementId}}));
-    }
-
-    getRows(statementId: string, startRow: number, endRow: number) {
-        const params = new HttpParams()
-            .set('statementId', statementId)
-            .set('startRow', startRow)
-            .set('endRow', endRow);
-        return firstValueFrom(this.http.get<any>(this.base, { params }));
-    }
+  async runSelectOne(): Promise<any[]> {
+    const submit = await firstValueFrom(
+      this.http.post<{ statementId: string }>('/api/reports/statement', { sql: 'SELECT 1 AS demo' })
+    );
+    const rows = await firstValueFrom(
+      this.http.get<{ rows: any[] }>(`/api/reports/rows?statementId=${submit.statementId}&startRow=0&endRow=100`)
+    );
+    return rows.rows;
+  }
 }

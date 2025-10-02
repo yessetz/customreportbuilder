@@ -1,10 +1,9 @@
 package com.mm.customreportbuilder.databricks;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.mm.customreportbuilder.service.impl.ReportServiceImpl;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.*;
@@ -14,8 +13,9 @@ import org.springframework.web.client.*;
 import javax.annotation.PostConstruct;
 import java.net.URI;
 import java.time.Duration;
-import java.util.concurrent.*;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.zip.GZIPInputStream;
 
 @Component
@@ -30,15 +30,14 @@ public class DatabricksSqlClient {
     private final ObjectMapper mapper = new ObjectMapper();
 
     public DatabricksSqlClient(
-                               @Value("${DATABRICKS_HOST:}") String host,
-                               @Value("${DATABRICKS_TOKEN:}") String token,
-                               @Value("${DATABRICKS_WAREHOUSEID:}") String warehouseId,
-                               @Value("${DATABRICKS_TIMEOUT_MS:3000}") long connectTimeoutMs,
-                               @Value("${DATABRICKS_READTIMEOUT_MS:30000}") long readTimeoutMs) {
+            @Value("${DATABRICKS_HOST:}") String host,
+            @Value("${DATABRICKS_TOKEN:}") String token,
+            @Value("${DATABRICKS_WAREHOUSEID:}") String warehouseId,
+            @Value("${DATABRICKS_TIMEOUT_MS:3000}") long connectTimeoutMs,
+            @Value("${DATABRICKS_READTIMEOUT_MS:30000}") long readTimeoutMs) {
 
         String h = (host == null) ? "" : host.trim();
-        if (h.endsWith("/"))
-            h = h.substring(0, h.length() - 1);
+        if (h.endsWith("/")) h = h.substring(0, h.length() - 1);
         this.host = h;
         this.token = (token == null) ? "" : token.trim();
         this.warehouseId = (warehouseId == null) ? "" : warehouseId.trim();
@@ -73,7 +72,6 @@ public class DatabricksSqlClient {
 
         Map<?, ?> resp = exchange("/api/2.0/sql/statements/", HttpMethod.POST, body, Map.class);
         Object id = resp == null ? null : resp.get("statement_id");
-
         if (!(id instanceof String)) {
             throw new IllegalStateException("Databricks did not return statement_id");
         }
@@ -85,32 +83,23 @@ public class DatabricksSqlClient {
 
     public SchemaInfo getSchema(String statementId) {
         Map<String, Object> status = fetchStatus(statementId);
-        if (status == null) {
-            return new SchemaInfo(List.of(), List.of());
-        }
+        if (status == null) return new SchemaInfo(List.of(), List.of());
         Map<String, Object> manifest = cast(status.get("manifest"));
         Map<String, Object> result = cast(status.get("result"));
         Map<String, Object> schema = null;
 
-        if (manifest != null) {
-            schema = cast(manifest.get("schema"));
-        }
-        if (schema == null && result != null) {
-            schema = cast(result.get("schema"));
-        }
-        if (schema == null) {
-            return new SchemaInfo(List.of(), List.of());
-        }
+        if (manifest != null) schema = cast(manifest.get("schema"));
+        if (schema == null && result != null) schema = cast(result.get("schema"));
+        if (schema == null) return new SchemaInfo(List.of(), List.of());
+
         List<Map<String, Object>> cols = cast(schema.get("columns"));
-        if (cols == null) {
-            return new SchemaInfo(List.of(), List.of());
-        }
+        if (cols == null) return new SchemaInfo(List.of(), List.of());
         cols.sort(Comparator.comparingInt(c -> ((Number) c.getOrDefault("position", 0)).intValue()));
+
         List<String> names = new ArrayList<>();
         for (Map<String, Object> c : cols) {
             Object n = c.get("name");
-            if (n instanceof String s) 
-                names.add(s);
+            if (n instanceof String s) names.add(s);
         }
         return new SchemaInfo(names, cols);
     }
@@ -132,9 +121,7 @@ public class DatabricksSqlClient {
                     Integer totalRows = manifest != null ? asInt(manifest.get("total_row_count")) : null;
                     Integer totalChunkCount = manifest != null ? asInt(manifest.get("total_chunk_count")) : null;
                     listener.onChunk(-1, List.of(), totalRows, state);
-                    if (state != null) {
-                        log.debug("STATE update statementId={} state={} totalRows={} totalChunks={}", statementId, state, totalRows, totalChunkCount);
-                    }
+
                     if (isTerminal(state)) {
                         if (!processed) {
                             processed = true;
@@ -143,17 +130,17 @@ public class DatabricksSqlClient {
                             if (!externalLinks.isEmpty()) {
                                 for (int i = 0; i < externalLinks.size(); i++) {
                                     Map<String, Object> link = externalLinks.get(i);
-                                    int chunkIdx = asInt(linkObj.get("chunk_index")) != null ? asInt(linkObj.get("chunk_index")) : i;
-                                    String url = (String) linkObj.get("external_link");
+                                    Integer idxOpt = asInt(link.get("chunk_index"));
+                                    int chunkIdx = (idxOpt != null) ? idxOpt : i;
+                                    String url = (String) link.get("external_link");
+                                    if (url == null || url.isBlank()) continue;
                                     List<List<Object>> rows = downloadExternalLink(url, chunkIdx);
                                     if (!rows.isEmpty()) {
                                         listener.onChunk(chunkIdx, rows, totalRows, state);
-                                    } else {
-                                        log.warn("Empty rows from external link for statement {} chunk {}", statementId, chunkIdx);
                                     }
                                 }
                             } else {
-                                int count = totalChunkCount != null ? totalChunkCount : 1;
+                                int count = (totalChunkCount != null && totalChunkCount > 0) ? totalChunkCount : 1;
                                 for (int i = 0; i < count; i++) {
                                     List<List<Object>> rows = fetchChunk(statementId, i, pageSize);
                                     if (!rows.isEmpty()) {
@@ -172,28 +159,21 @@ public class DatabricksSqlClient {
             } catch (Exception e) {
                 log.error("Error streaming chunks for statementId={}", statementId, e);
             }
-        })
+        });
     }
 
     private String extractState(Map<String, Object> status) {
         if (status == null) return null;
         Map<String, Object> s = cast(status.get("status"));
-        if (s != null && s.get("state") instanceof String st) {
-            return st;
-        }
-        if (status.get("state") instanceof String st2) {
-            return st2;
-        }
+        if (s != null && s.get("state") instanceof String st) return st;
+        if (status.get("state") instanceof String st2) return st2;
         return null;
     }
 
     private List<Map<String, Object>> extractExternalLinks(Map<String, Object> result) {
         if (result == null) return List.of();
         Object o = result.get("external_links");
-
-        if (!(o instanceof List<?> list)) {
-            return List.of();
-        }
+        if (!(o instanceof List<?> list)) return List.of();
         List<Map<String, Object>> out = new ArrayList<>();
         for (Object e : list) {
             if (e instanceof Map<?, ?> m && m.get("external_link") instanceof String) {
@@ -203,22 +183,15 @@ public class DatabricksSqlClient {
         return out;
     }
 
-    private boolean isTerminal(String s) {
-        if (s == null) return false;
-        String u = s.toUpperCase(Locale.ROOT);
-        return u.equals("SUCCEEDED") || u.equals("FINISHED") || u.equals("FAILED") || u.equals("CANCELED");
-    }
-
     private List<List<Object>> downloadExternalLink(String url, int chunkIdx) {
         try {
             HttpHeaders h = new HttpHeaders();
             h.setAccept(List.of(MediaType.APPLICATION_JSON, MediaType.TEXT_PLAIN));
-
             URI uri = URI.create(url);
             ResponseEntity<byte[]> resp = rest.exchange(uri, HttpMethod.GET, new HttpEntity<>(h), byte[].class);
             if (!resp.getStatusCode().is2xxSuccessful() || resp.getBody() == null) {
-                    log.warn("External link non-200 chunk={} status={}", chunkIdx, resp.getStatusCode());
-                    return List.of();
+                log.warn("External link non-200 chunk={} status={}", chunkIdx, resp.getStatusCode());
+                return List.of();
             }
             byte[] payload = resp.getBody();
             if (isGzip(payload)) {
@@ -241,8 +214,8 @@ public class DatabricksSqlClient {
             }
             log.debug("Downloaded external link chunk={} rows={}", chunkIdx, rows.size());
             return rows;
-        } catch (Exception e) {
-            log.error("External Link HTTP: {} chunk={} url={} body={}", e.getStatusCode(), chunkIdx, url, e.getResponseBodyAsString());
+        } catch (HttpStatusCodeException e) {
+            log.error("External Link HTTP {} chunk={} url={} body={}", e.getStatusCode(), chunkIdx, url, e.getResponseBodyAsString());
             return List.of();
         } catch (Exception e) {
             log.error("Error downloading external link chunk={} url={}", chunkIdx, url, e);
@@ -252,10 +225,6 @@ public class DatabricksSqlClient {
 
     private boolean isGzip(byte[] data) {
         return data != null && data.length >= 2 && (data[0] == (byte) 0x1f) && (data[1] == (byte) 0x8b);
-    }
-
-    private String abbreviate(String s) {
-        return s.length() <= 160 ? s : s.substring(0, 160) + "...";
     }
 
     private List<List<Object>> coerceObjectsToArrays(List<Map<String, Object>> objects) {
@@ -273,20 +242,23 @@ public class DatabricksSqlClient {
     }
 
     public List<List<Object>> fetchChunk(String statementId, int chunkIndex, int pageSize) {
-        String path = "/api/2.0/sql/statements/" + statementId + "/result/chunk" + chunkIndex + "?row_limit=" + pageSize + "$format=JSON_ARRAY";
+        String path = "/api/2.0/sql/statements/" + statementId + "/result/chunks/" + chunkIndex
+                + "?row_limit=" + pageSize + "&format=JSON_ARRAY";
         Map<?, ?> resp = exchange(path, HttpMethod.GET, null, Map.class);
-        if (resp == null) 
-            return List.of();
+        if (resp == null) return List.of();
+
         List<List<Object>> rows = null;
+
+        Object chunkObj = resp.get("chunk");
         if (chunkObj instanceof Map<?, ?>) {
             Map<String, Object> chunk = cast(chunkObj);
-            if (chunk.get("rows") instanceof List<?>)
-                rows = cast(chunk.get("rows"));
-            if ((rows == null || rows.isEmpty()) && chunk.get("data_array") instanceof List<?)
+            if (chunk.get("rows") instanceof List<?>) rows = cast(chunk.get("rows"));
+            if ((rows == null || rows.isEmpty()) && chunk.get("data_array") instanceof List<?>)
                 rows = cast(chunk.get("data_array"));
             if ((rows == null || rows.isEmpty()) && chunk.get("external_link") instanceof String link)
                 rows = downloadExternalLink(link, chunkIndex);
         }
+
         if ((rows == null || rows.isEmpty()) && resp.get("data_array") instanceof List<?>)
             rows = cast(resp.get("data_array"));
         if ((rows == null || rows.isEmpty()) && resp.get("rows") instanceof List<?>)
@@ -297,15 +269,12 @@ public class DatabricksSqlClient {
             for (Object o : extList) {
                 if (o instanceof Map<?, ?> m && m.get("external_link") instanceof String link2) {
                     rows = downloadExternalLink((String) link2, chunkIndex);
-                    if (rows != null && !rows.isEmpty()) {
-                        break;
-                    }
+                    if (rows != null && !rows.isEmpty()) break;
                 }
             }
         }
-        if (rows == null) {
-            rows = List.of();
-        }
+
+        if (rows == null) rows = List.of();
         log.debug("Fetched chunk endpoint chunkIndex={} rows={}", chunkIndex, rows.size());
         return rows;
     }
@@ -315,30 +284,25 @@ public class DatabricksSqlClient {
     }
 
     private Integer asInt(Object o) {
-        if (o instanceof Number n) {
-            return n.intValue();
-        }
+        if (o instanceof Number n) return n.intValue();
         if (o instanceof String s) {
-            try {
-                return Integer.parseInt(s);
-            } catch (NumberFormatException nfe) {
-                return null;
-            }
+            try { return Integer.parseInt(s); } catch (NumberFormatException ignored) {}
         }
         return null;
     }
 
+    @SuppressWarnings("unchecked")
     private <T> T cast(Object o) {
         return (T) o;
     }
 
     private <T> T exchange(String path, HttpMethod method, Object body, Class<T> type) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        HttpEntity<?> entity = new HttpEntity<>(body, headers);
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.setBearerAuth(token);
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-            HttpEntity<?> entity = new HttpEntity<>(body, headers);
             ResponseEntity<T> resp = rest.exchange(host + path, method, entity, type);
             return resp.getBody();
         } catch (HttpClientErrorException e) {
@@ -350,11 +314,11 @@ public class DatabricksSqlClient {
         } catch (ResourceAccessException e) {
             log.error("Databricks resource access error path={}", path, e);
             throw new IllegalStateException("Databricks resource access error: " + e.getMessage(), e);
-        } 
+        }
     }
 
     @FunctionalInterface
     public interface ChunkListener {
         void onChunk(int chunkIndex, List<List<Object>> rows, Integer totalRows, String state);
-    }   
+    }
 }

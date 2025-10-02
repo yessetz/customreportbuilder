@@ -1,7 +1,9 @@
+// src/main.ts
+import 'zone.js';
 import { bootstrapApplication } from '@angular/platform-browser';
-import { ReportGridComponent } from './app/report-grid.component';
 import { provideHttpClient } from '@angular/common/http';
+import { AppComponent } from './app/app.component';
 
-bootstrapApplication(ReportGridComponent, {
-    providers: [provideHttpClient()]
+bootstrapApplication(AppComponent, {
+  providers: [provideHttpClient()],
 }).catch(err => console.error(err));

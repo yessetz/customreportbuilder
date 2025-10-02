@@ -17,7 +17,11 @@ public class ReportsController {
 
     @PostMapping("/statement")
     public Map<String, Object> submit(@RequestBody Map<String, Object> body) {
-        String sql = body.getOrDefault("sql", "SELECT 1");
+        String sql = "SELECT 1";
+        Object o = body.get("sql");
+        if (o instanceof String s && !s.isBlank()) {
+            sql = s;
+        }
         return reportService.submitStatement(sql);
     }
 
@@ -30,7 +34,9 @@ public class ReportsController {
     }
 
     @GetMapping
-    public ResponseEntity<Map<String, Object>> page(@RequestParam String statementId, @RequestParam int startRow, @RequestParam int endRow,
+    public ResponseEntity<Map<String, Object>> page(@RequestParam String statementId,
+                                                    @RequestParam int startRow,
+                                                    @RequestParam int endRow,
                                                     @RequestParam(required = false) String sortModel,
                                                     @RequestParam(required = false) String filterModel) {
         if (statementId == null || statementId.isBlank()) {
