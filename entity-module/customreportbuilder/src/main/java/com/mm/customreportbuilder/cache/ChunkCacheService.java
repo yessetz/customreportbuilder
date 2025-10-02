@@ -105,5 +105,16 @@ public class ChunkCacheService {
 
     public void invalidateStatement(String userId, String statementId) {
         stringTemplate.delete(metaKey(userId, statementId));
+        Map<String, Object> meta = getMeta(userId, statementId);
+        if (meta != null) {
+            Integer rowCount = (Integer) meta.get("rowCount");
+            Integer pageSize = (Integer) meta.getOrDefault("pageSize", 500);
+            if (rowCount != null && pageSize != null && pageSize > 0) {
+                int totalChunks = (rowCount + pageSize - 1) / pageSize;
+                for (int i = 0; i < totalChunks; i++) {
+                    bytesTemplate.delete(chunkKey(userId, statementId, i));
+                }
+            }
+        }
     }
 }

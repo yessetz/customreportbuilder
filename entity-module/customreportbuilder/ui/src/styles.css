@@ -1,3 +1,1 @@
-@import 'ag-grid-community/styles/ag-grid.css';
-@import 'ag-grid-community/styles/ag-theme-quartz.css';
-html, body { height: 100%; margin: 0; }
+/* styles not added, because always return issue with Ag-Grid theming, have to be fixed too */
