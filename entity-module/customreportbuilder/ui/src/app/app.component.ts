@@ -305,7 +305,9 @@ export class AppComponent implements OnInit {
       this.prefetchCache.set(nextStart, rows);
       while (this.prefetchCache.size > this.maxPrefetchBlocks) {
         const oldestKey = this.prefetchCache.keys().next().value;
-        this.prefetchCache.delete(oldestKey);
+        if (typeof oldestKey === 'number') {
+          this.prefetchCache.delete(oldestKey);
+        }
       }
     } catch (e) {
       // Ignore prefetch failures; normal requests will still work
