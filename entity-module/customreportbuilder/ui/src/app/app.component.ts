@@ -2,19 +2,25 @@ import { Component, inject, OnInit } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { AgGridAngular } from 'ag-grid-angular';
-import type { ColDef, GridReadyEvent } from 'ag-grid-community';
+import type {
+  ColDef,
+  GridReadyEvent,
+  GridApi,
+  IDatasource,
+  IGetRowsParams,
+} from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
 
 const BASE = '/api/reports'; // no trailing slash
 const STORAGE_KEY = 'crb:lastStatementId';
 
 type Meta = {
-  state?: string;           // e.g., "SUCCEEDED"
-  rowCount?: number;        // total rows
-  pageSize?: number;        // server page size (default 500)
-  columns?: string[];       // e.g., ["demo"]
+  state?: string;
+  rowCount?: number;
+  pageSize?: number;
+  columns?: string[];
   schema?: Array<{ name: string; type_text?: string; type_name?: string; position?: number }>;
-  status?: { state?: string; message?: string; };
+  status?: { state?: string; message?: string };
 };
 
 @Component({
@@ -23,7 +29,7 @@ type Meta = {
   imports: [AgGridAngular],
   template: `
     <div style="padding:12px;">
-      <h3>Databricks → Redis → API → Grid (no styles)</h3>
+      <h3>Databricks → Redis → API → Grid (infinite model)</h3>
 
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
         <button (click)="run()" [disabled]="loading">
@@ -54,16 +60,18 @@ type Meta = {
       <div style="border:1px solid #ddd; padding:8px;">
         <ag-grid-angular
           [theme]="theme.quartz"
+          [rowModelType]="'infinite'"
+          [cacheBlockSize]="cacheBlockSize"
+          [maxBlocksInCache]="maxBlocksInCache"
           [columnDefs]="columnDefs"
           [defaultColDef]="defaultColDef"
-          [rowData]="rowData"
           (gridReady)="onGridReady($event)"
           style="color: black; width: 100%; height: 700px;">
         </ag-grid-angular>
       </div>
 
       <div *ngIf="debugResponse" style="margin-top:12px;">
-        <strong>raw rows response (debug)</strong>
+        <strong>last rows response (debug)</strong>
         <pre>{{ debugResponse | json }}</pre>
       </div>
     </div>
@@ -72,16 +80,23 @@ type Meta = {
 export class AppComponent implements OnInit {
   private http = inject(HttpClient);
 
-  theme = themeQuartz; // Theming API only (no CSS files)
+  theme = themeQuartz;
   loading = false;
   error = '';
   statementId: string | null = null;
   meta: Meta | null = null;
 
+  // AG Grid
+  private gridApi: GridApi | null = null;
+
   columnDefs: ColDef[] = [];
   defaultColDef: ColDef = { resizable: true, sortable: true, filter: true, flex: 1, minWidth: 120 };
-  rowData: any[] = [];
 
+  // Infinite model settings (synced to server page size)
+  cacheBlockSize = 500; // default until meta arrives
+  maxBlocksInCache = 4; // tune as desired
+
+  // Debug
   debugResponse: any = null;
   resumeNotice = '';
 
@@ -90,21 +105,26 @@ export class AppComponent implements OnInit {
     const last = localStorage.getItem(STORAGE_KEY);
     if (!last) return;
 
-    // Try to restore if Redis still has meta
     try {
       this.loading = true;
       this.resumeNotice = 'Resuming last result…';
       this.statementId = last;
 
-      // Quick poll for meta (shorter window than initial submit)
+      // Short poll for meta
       this.meta = await this.pollMeta(this.statementId, /*timeout*/ 5000, /*interval*/ 250);
 
-      // If meta exists, fetch initial block [0 .. rowCount) or [0..1) as before
-      await this.loadInitialRowsForCurrentStatement();
+      // Build columns + align block size with server
+      this.setupColumnsFromMeta();
+      this.cacheBlockSize = this.meta?.pageSize ?? 500;
+
+      // If grid is already ready, attach datasource now
+      if (this.gridApi) {
+        this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
+        this.gridApi.setGridOption('datasource', this.createDatasource());
+      }
 
       this.resumeNotice = 'Resumed from previous result.';
-    } catch (_e) {
-      // Meta likely expired from Redis; forget the cached key silently
+    } catch {
       localStorage.removeItem(STORAGE_KEY);
       this.statementId = null;
       this.meta = null;
@@ -115,16 +135,31 @@ export class AppComponent implements OnInit {
   }
 
   // ---------- UI actions ----------
-  onGridReady(_e: GridReadyEvent) {
-    // nothing needed; we bind [rowData]
+  onGridReady(e: GridReadyEvent) {
+    this.gridApi = e.api;
+
+    if (this.statementId && this.meta) {
+      // If resume logic already set everything up
+      this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
+      this.gridApi.setGridOption('datasource', this.createDatasource());
+    }
   }
 
   async run() {
     this.loading = true;
     this.error = '';
-    this.rowData = [];
-    this.columnDefs = [];
-    let querySQL = 'SELECT 1 AS demo';
+    this.debugResponse = null;
+
+    // Reset grid cache / datasource to empty until new one is set
+    if (this.gridApi) {
+      const emptyDs: IDatasource = {
+        getRows: (p: IGetRowsParams) => p.successCallback([], 0),
+      };
+      this.gridApi.setGridOption('datasource', emptyDs);
+      this.gridApi.purgeInfiniteCache?.();
+    }
+
+    const querySQL = 'SELECT 1 AS demo';
 
     try {
       // 1) submit
@@ -132,15 +167,20 @@ export class AppComponent implements OnInit {
         this.http.post<{ statementId: string }>(`${BASE}/statement`, { sql: querySQL })
       );
       this.statementId = submit.statementId;
-
-      // Save for resume
       localStorage.setItem(STORAGE_KEY, this.statementId);
 
       // 2) poll meta
       this.meta = await this.pollMeta(this.statementId, /*timeout*/ 20000, /*interval*/ 300);
 
-      // 3) load initial rows
-      await this.loadInitialRowsForCurrentStatement();
+      // 3) columns + block size from meta
+      this.setupColumnsFromMeta();
+      this.cacheBlockSize = this.meta?.pageSize ?? 500;
+
+      // 4) datasource
+      if (this.gridApi) {
+        this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
+        this.gridApi.setGridOption('datasource', this.createDatasource());
+      }
 
     } catch (err) {
       this.error = this.normalizeHttpError(err);
@@ -152,66 +192,102 @@ export class AppComponent implements OnInit {
 
   async clearResume() {
     if (!this.statementId) return;
-
     try {
       await firstValueFrom(this.http.delete<void>(`${BASE}?statementId=${this.statementId}`));
     } catch {
-      // Even if server evict fails (expired already), still clear local
+      // ignore; still clear local
     } finally {
       localStorage.removeItem(STORAGE_KEY);
       this.statementId = null;
       this.meta = null;
-      this.rowData = [];
-      this.columnDefs = [];
+
+      // Reset grid view to empty datasource
+      if (this.gridApi) {
+        const emptyDs: IDatasource = { getRows: (p: IGetRowsParams) => p.successCallback([], 0) };
+        this.gridApi.setGridOption('datasource', emptyDs);
+        this.gridApi.purgeInfiniteCache?.();
+      }
+
       this.resumeNotice = '';
     }
   }
 
+  // ---------- Infinite datasource ----------
+  private createDatasource(): IDatasource {
+    const statementId = this.statementId!;
+    const totalRows = this.meta?.rowCount ?? null;
+
+    return {
+      getRows: async (params: IGetRowsParams) => {
+        const start = params.startRow;
+        const end = params.endRow;
+        const url = this.mkRowsUrl(statementId, start, end);
+
+        try {
+          const res = await this.safeGet<any>(url);
+          this.debugResponse = res;
+
+          const rows = this.mapToObjects(this.extractRows(res));
+
+          const lastRow =
+            typeof res?.lastRow === 'number'
+              ? res.lastRow
+              : typeof totalRows === 'number'
+              ? totalRows
+              : -1; // unknown
+
+          params.successCallback(rows, lastRow);
+        } catch (err) {
+          console.error('getRows error', err);
+          params.failCallback();
+        }
+      },
+    };
+  }
+
   // ---------- Helpers ----------
-  private async loadInitialRowsForCurrentStatement() {
-    const rc = Math.max(this.meta?.rowCount ?? 0, 0);
-    // Original behavior: if rowCount is 0 or unknown, at least ask for [0..1)
-    const endExclusive = Math.max(1, rc);
-
-    const url = this.mkRowsUrl(this.statementId!, 0, endExclusive);
-    const res = await this.safeGet<any>(url);
-    this.debugResponse = res;
-
-    const rawRows = this.extractRows(res);
-
-    // Decide columns: meta.columns > meta.schema (sorted by position) > sample row
+  private setupColumnsFromMeta() {
     const colNames: string[] =
-      (this.meta?.columns && this.meta.columns.length
+      this.meta?.columns?.length
         ? this.meta.columns
         : this.meta?.schema?.length
-          ? [...this.meta.schema]
-              .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-              .map(c => c.name)
-          : rawRows.length
-            ? rawRows[0].map((_v: any, i: number) => 'col' + i)
-            : []);
+        ? [...this.meta.schema]
+            .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+            .map((c) => c.name)
+        : [];
 
-    const objects = Array.isArray(rawRows)
-      ? rawRows.map(r => {
-          if (!Array.isArray(r)) return r; // already an object
-          const o: any = {};
-          for (let i = 0; i < colNames.length; i++) {
-            o[colNames[i]] = r[i];
-          }
-          return o;
-        })
-      : [];
+    if (colNames.length) {
+      this.columnDefs = colNames.map((name: string): ColDef => ({
+        headerName: name,
+        field: name,
+      }));
+      this.gridApi?.setGridOption('columnDefs', this.columnDefs);
+    }
+  }
 
-    this.columnDefs = colNames.map((name: string): ColDef => ({ headerName: name, field: name }));
-    this.rowData = objects;
+  private mapToObjects(rawRows: any[]): any[] {
+    if (!rawRows?.length) return [];
+    // Already objects?
+    if (typeof rawRows[0] === 'object' && !Array.isArray(rawRows[0])) {
+      return rawRows;
+    }
+    // Convert arrays → objects using current columnDefs
+    const colNames = this.columnDefs.map((c) => String(c.field));
+    return rawRows.map((r: any[]) => {
+      const o: any = {};
+      for (let i = 0; i < colNames.length; i++) {
+        o[colNames[i]] = r?.[i];
+      }
+      return o;
+    });
   }
 
   private mkRowsUrl(statementId: string, start: number, end: number) {
     const p = new URLSearchParams();
     p.set('statementId', statementId);
     p.set('startRow', String(start));
-    p.set('endRow',   String(end));
-    // NOTE: rows endpoint is GET on the base "/api/reports" per backend controller
+    p.set('endRow', String(end));
+    // rows endpoint is GET on "/api/reports"
     return `${BASE}?${p.toString()}`;
   }
 
@@ -224,14 +300,16 @@ export class AppComponent implements OnInit {
     while (true) {
       let meta: Meta;
       try {
-        meta = await firstValueFrom(this.http.get<Meta>(`${BASE}/statement?statementId=${statementId}`));
+        meta = await firstValueFrom(
+          this.http.get<Meta>(`${BASE}/statement?statementId=${statementId}`)
+        );
       } catch {
         if (Date.now() - start > timeoutMs) throw new Error('Timed out waiting for statement meta.');
         await this.delay(intervalMs);
         continue;
       }
       const state = (meta.state ?? '').toUpperCase();
-      if (typeof meta.rowCount === 'number') return meta; // treat counts as "ready"
+      if (typeof meta.rowCount === 'number') return meta;
       if (['SUCCEEDED', 'DONE', 'COMPLETED'].includes(state)) return meta;
       if (Date.now() - start > timeoutMs) throw new Error('Timed out waiting for statement meta.');
       await this.delay(intervalMs);
@@ -239,25 +317,22 @@ export class AppComponent implements OnInit {
   }
 
   private extractRows(res: any): any[] {
-    // Try common shapes first
     if (Array.isArray(res?.rows)) return res.rows;
     if (Array.isArray(res?.data)) return res.data;
     if (Array.isArray(res?.result)) return res.result;
     if (Array.isArray(res)) return res;
 
-    // Some APIs return chunks; pick first non-empty chunk
     if (Array.isArray(res?.chunks)) {
       for (const ch of res.chunks) {
         const rows = ch?.rows || ch?.data || ch?.result;
         if (Array.isArray(rows) && rows.length) return rows;
       }
     }
-    // Last resort
     return [];
   }
 
   private delay(ms: number) {
-    return new Promise(res => setTimeout(res, ms));
+    return new Promise((res) => setTimeout(res, ms));
   }
 
   private normalizeHttpError(err: unknown): string {
@@ -266,6 +341,10 @@ export class AppComponent implements OnInit {
       return `${err.status} ${err.statusText} — ${err.url}\n${body}`;
     }
     if (err instanceof Error) return err.message;
-    try { return JSON.stringify(err); } catch { return String(err); }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
   }
 }
