@@ -9,6 +9,7 @@ import java.util.*;
 import com.mm.customreportbuilder.service.ReportService;
 import com.mm.customreportbuilder.databricks.DatabricksSqlClient;
 import com.mm.customreportbuilder.cache.ChunkCacheService;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class ReportServiceImpl implements ReportService {
@@ -21,6 +22,11 @@ public class ReportServiceImpl implements ReportService {
     @Value("${CACHE_PAGE_SIZE:500}")
     private int PAGE_SIZE;
 
+    @Value("${CACHE_FIRST_CHUNK_MAX_WAIT_MS:8000}")
+    private long FIRST_CHUNK_MAX_WAIT_MS;
+    @Value("${CACHE_FIRST_CHUNK_POLL_MS:150}")
+    private long FIRST_CHUNK_POLL_MS;
+
     public ReportServiceImpl(DatabricksSqlClient client, ChunkCacheService cache) {
         this.client = client;
         this.cache = cache;
@@ -32,12 +38,24 @@ public class ReportServiceImpl implements ReportService {
         String statementId = client.submitStatement(sql);
         DatabricksSqlClient.SchemaInfo schemaInfo = client.getSchema(statementId);
         cache.putMeta(userId, statementId, PAGE_SIZE, null, schemaInfo.columnNames(), schemaInfo.columnMeta(), "PENDING");
-
+        final AtomicInteger nextPageIndex = new AtomicInteger(0);
         client.streamChunks(statementId, PAGE_SIZE, (chunkIndex, rows, totalRows, state) -> {
+            // chunkIndex == -1 is used for meta/state notifications — skip data handling
             if (chunkIndex >= 0 && rows != null && !rows.isEmpty()) {
-                cache.putChunk(userId, statementId, chunkIndex, rows);
-                log.debug("STORED chunk={} rows={} statementId={}", chunkIndex, rows.size(), statementId);
+                // Re-slice the Databricks DB chunk (often ~10k rows, sometimes smaller) into 500-row pages
+                for (int offset = 0; offset < rows.size(); offset += PAGE_SIZE) {
+                    int to = Math.min(offset + PAGE_SIZE, rows.size());
+                    int pageIdx = nextPageIndex.getAndIncrement();
+
+                    List<List<Object>> pageRows = rows.subList(offset, to);
+                    cache.putChunk(userId, statementId, pageIdx, pageRows);
+
+                    log.debug("STORED page chunk={} rows={} statementId={} (from dbChunkIndex={})",
+                            pageIdx, pageRows.size(), statementId, chunkIndex);
+                }
             }
+
+            // Keep pushing meta updates (rowCount/state) as they arrive
             if (totalRows != null || state != null) {
                 cache.putMeta(userId, statementId, PAGE_SIZE, totalRows, null, null, state);
             }
@@ -80,10 +98,17 @@ public class ReportServiceImpl implements ReportService {
 
         int firstChunk = Math.max(0, startRow / pageSize);
         int lastChunk = Math.max(firstChunk, (endRow - 1) / pageSize);
+        
+        final long deadline = System.currentTimeMillis() + Math.max(0L, FIRST_CHUNK_MAX_WAIT_MS);
         List<List<Object>> buffer = new ArrayList<>();
 
         for (int index = firstChunk; index <= lastChunk; index++) {
             List<List<Object>> chunk = cache.getChunk(userId, statementId, index);
+            
+            if (chunk == null || chunk.isEmpty()) {
+                chunk = waitForChunk(userId, statementId, index, deadline, Math.max(1L, FIRST_CHUNK_POLL_MS));
+            }
+            
             if (chunk != null && !chunk.isEmpty()) {
                 buffer.addAll(chunk);
             } else {
@@ -109,5 +134,21 @@ public class ReportServiceImpl implements ReportService {
     @Override
     public void evict(String statementId) {
         cache.invalidateStatement("local", statementId);
+    }
+
+    private List<List<Object>> waitForChunk(String userId, String statementId, int index, long deadlineMs, long pollMs) {
+        while (System.currentTimeMillis() < deadlineMs) {
+            List<List<Object>> chunk = cache.getChunk(userId, statementId, index);
+            if (chunk != null && !chunk.isEmpty()) {
+                return chunk;
+            }
+            try {
+                Thread.sleep(pollMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return null;
     }
 }

@@ -140,11 +140,19 @@ public class DatabricksSqlClient {
                                     }
                                 }
                             } else {
-                                int count = (totalChunkCount != null && totalChunkCount > 0) ? totalChunkCount : 1;
-                                for (int i = 0; i < count; i++) {
-                                    List<List<Object>> rows = fetchChunk(statementId, i, pageSize);
-                                    if (!rows.isEmpty()) {
-                                        listener.onChunk(i, rows, totalRows, state);
+                                int dbChunkCount = (totalChunkCount != null && totalChunkCount > 0) ? totalChunkCount : 1;
+
+                                log.debug("Streaming DB chunks without external links: totalRows={} pageSize={} totalChunkCount(db)={} ",
+                                        totalRows, pageSize, dbChunkCount);
+
+                                for (int dbIndex = 0; dbIndex < dbChunkCount; dbIndex++) {
+                                    // IMPORTANT: dbIndex is the *Databricks* chunk index, not our 500-row page index.
+                                    List<List<Object>> dbRows = fetchChunk(statementId, dbIndex, pageSize /*unused for DB index; kept for signature stability*/);
+                                    int size = (dbRows == null) ? 0 : dbRows.size();
+                                    log.debug("Fetched DB chunk {} with {} rows", dbIndex, size);
+
+                                    if (dbRows != null && !dbRows.isEmpty()) {
+                                        listener.onChunk(dbIndex, dbRows, totalRows, state);
                                     }
                                 }
                             }

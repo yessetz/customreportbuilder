@@ -1,19 +1,26 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, OnInit } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { AgGridAngular } from 'ag-grid-angular';
-import type { ColDef, GridReadyEvent } from 'ag-grid-community';
+import type {
+  ColDef,
+  GridReadyEvent,
+  GridApi,
+  IDatasource,
+  IGetRowsParams,
+} from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
 
 const BASE = '/api/reports'; // no trailing slash
+const STORAGE_KEY = 'crb:lastStatementId';
 
 type Meta = {
-  state?: string;           // e.g., "SUCCEEDED"
-  rowCount?: number;        // total rows
+  state?: string;
+  rowCount?: number;
   pageSize?: number;
-  columns?: string[];       // e.g., ["demo"]
+  columns?: string[];
   schema?: Array<{ name: string; type_text?: string; type_name?: string; position?: number }>;
-  status?: { state?: string; message?: string; };
+  status?: { state?: string; message?: string };
 };
 
 @Component({
@@ -21,12 +28,18 @@ type Meta = {
   standalone: true,
   imports: [AgGridAngular],
   template: `
-    <div style="padding:12px;">
-      <h3>Databricks → Redis → API → Grid (no styles)</h3>
+    <div style="padding:12px; position: relative;">
+      <h3>Databricks → Redis → API → Grid (infinite + prefetch)</h3>
 
-      <button (click)="run()" [disabled]="loading">
-        {{ loading ? 'Running…' : 'Run SELECT 1 AS demo' }}
-      </button>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <button (click)="run()" [disabled]="loading">
+          {{ loading ? 'Running…' : 'Run SELECT 1 AS demo' }}
+        </button>
+
+        <button *ngIf="statementId" (click)="clearResume()" [disabled]="loading" title="Forget cached result">
+          Clear resume
+        </button>
+      </div>
 
       <p *ngIf="error" style="color:#b00; white-space:pre-wrap; margin-top:8px;">
         {{ error }}
@@ -42,103 +55,297 @@ type Meta = {
         <pre>{{ meta | json }}</pre>
       </div>
 
-      <div style="height:400px; width:100%; margin-top:12px;">
+      <div style="border:1px solid #ddd; padding:8px;">
         <ag-grid-angular
-          [theme]="theme"
+          [theme]="theme.quartz"
+          [rowModelType]="'infinite'"
+          [cacheBlockSize]="cacheBlockSize"
+          [maxBlocksInCache]="maxBlocksInCache"
+          [maxConcurrentDatasourceRequests]="maxConcurrentDatasourceRequests"
           [columnDefs]="columnDefs"
           [defaultColDef]="defaultColDef"
-          [rowData]="rowData"
           (gridReady)="onGridReady($event)"
           style="color: black; width: 100%; height: 700px;">
         </ag-grid-angular>
       </div>
 
+      <!-- Debug (last server response) -->
       <div *ngIf="debugResponse" style="margin-top:12px;">
-        <strong>raw rows response (debug)</strong>
+        <strong>last rows response (debug)</strong>
         <pre>{{ debugResponse | json }}</pre>
+      </div>
+
+      <!-- Tiny toast -->
+      <div
+        *ngIf="toast.visible"
+        style="
+          position: fixed; right: 16px; bottom: 16px;
+          background: rgba(0,0,0,0.85); color: #fff;
+          padding: 10px 12px; border-radius: 8px; font-size: 13px;">
+        {{ toast.msg }}
       </div>
     </div>
   `,
 })
-export class AppComponent {
+export class AppComponent implements OnInit {
   private http = inject(HttpClient);
 
-  theme = themeQuartz; // Theming API only (no CSS files)
+  theme = themeQuartz;
   loading = false;
   error = '';
   statementId: string | null = null;
   meta: Meta | null = null;
 
+  // AG Grid
+  private gridApi: GridApi | null = null;
+
   columnDefs: ColDef[] = [];
   defaultColDef: ColDef = { resizable: true, sortable: true, filter: true, flex: 1, minWidth: 120 };
-  rowData: any[] = [];
 
+  // Infinite model settings (synced to server page size)
+  cacheBlockSize = 500; // default until meta arrives
+  maxBlocksInCache = 4; // tune as desired
+  maxConcurrentDatasourceRequests = 2; // allow overlap (helps when user scrolls fast)
+
+  // Prefetch cache for next block (startRow -> rows[])
+  private prefetchCache = new Map<number, any[]>();
+  private pendingPrefetches = new Set<number>();
+  private maxPrefetchBlocks = 2; // keep at most N prefetched blocks in memory
+
+  // Debug
   debugResponse: any = null;
 
-  onGridReady(_e: GridReadyEvent) {
-    // nothing needed; we bind [rowData]
+  // Toast
+  toast = { visible: false, msg: '', timer: null as any };
+
+  // ---------- Lifecycle: resume on reload ----------
+  async ngOnInit() {
+    const last = localStorage.getItem(STORAGE_KEY);
+    if (!last) return;
+
+    try {
+      this.loading = true;
+      this.statementId = last;
+
+      // Short poll for meta
+      this.meta = await this.pollMeta(this.statementId, /*timeout*/ 5000, /*interval*/ 250);
+
+      // Build columns + align block size with server
+      this.setupColumnsFromMeta();
+      this.cacheBlockSize = this.meta?.pageSize ?? 500;
+
+      if (this.gridApi) {
+        this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
+        this.gridApi.setGridOption('datasource', this.createDatasource());
+      }
+
+      this.showToast('Resumed previous result');
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+      this.statementId = null;
+      this.meta = null;
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  // ---------- UI actions ----------
+  onGridReady(e: GridReadyEvent) {
+    this.gridApi = e.api;
+
+    if (this.statementId && this.meta) {
+      this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
+      this.gridApi.setGridOption('datasource', this.createDatasource());
+    }
   }
 
   async run() {
     this.loading = true;
     this.error = '';
-    this.rowData = [];
-    this.columnDefs = [];
-    let querySQL = 'SELECT 1 AS demo';
+    this.debugResponse = null;
+
+    // Reset all caches
+    this.prefetchCache.clear();
+    this.pendingPrefetches.clear();
+
+    // Reset grid
+    if (this.gridApi) {
+      const emptyDs: IDatasource = { getRows: (p: IGetRowsParams) => p.successCallback([], 0) };
+      this.gridApi.setGridOption('datasource', emptyDs);
+      this.gridApi.purgeInfiniteCache?.();
+    }
+
+    const querySQL = 'SELECT 1 AS demo';
+
     try {
       // 1) submit
       const submit = await firstValueFrom(
         this.http.post<{ statementId: string }>(`${BASE}/statement`, { sql: querySQL })
       );
       this.statementId = submit.statementId;
+      localStorage.setItem(STORAGE_KEY, this.statementId);
+
       // 2) poll meta
-      this.meta = await this.pollMeta(this.statementId, 20000, 300);
-      const rc = Math.max(this.meta.rowCount ?? 0, 0);
-      const endExclusive = Math.max(1, rc); 
-      const url = this.mkRowsUrl(this.statementId, 0, endExclusive);
-      
-      let res = await this.safeGet<any>(url);
-      let rawRows = this.extractRows(res);
+      this.meta = await this.pollMeta(this.statementId, /*timeout*/ 20000, /*interval*/ 300);
 
-      if (rawRows.length === 0 && rc > 0) {
-        // Try again if we expected rows but got none
-        await this.delay(500);
-        res = await this.safeGet<any>(url);
-        rawRows = this.extractRows(res);
+      // 3) columns + block size from meta
+      this.setupColumnsFromMeta();
+      this.cacheBlockSize = this.meta?.pageSize ?? 500;
+
+      // 4) datasource
+      if (this.gridApi) {
+        this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
+        this.gridApi.setGridOption('datasource', this.createDatasource());
       }
-      
-      this.debugResponse = res;
 
-      const colNames: string[] = 
-        (this.meta?.columns && this.meta.columns.length 
-          ? this.meta.columns 
-          : this.meta?.schema?.length
-            ? [...this.meta.schema]
-              .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-              .map(c => c.name)
-            : rawRows.length
-              ? rawRows[0].map((_v: any, i: number) => 'col' + i)
-              : []);
-      
-      const objects = Array.isArray(rawRows)
-          ? rawRows.map(r => {
-              if (!Array.isArray(r)) return r; // already an object
-              const o: any = {};
-              for (let i = 0; i < colNames.length; i++) {
-                o[colNames[i]] = r[i];
-              }
-              return o;
-            })
-          : [];
-    
-      this.columnDefs = colNames.map((name: string): ColDef => ({ headerName: name, field: name }));
-      this.rowData = objects;
+      this.showToast('Query started');
     } catch (err) {
       this.error = this.normalizeHttpError(err);
       console.error('run() failed:', err);
     } finally {
       this.loading = false;
     }
+  }
+
+  async clearResume() {
+    if (!this.statementId) return;
+    try {
+      await firstValueFrom(this.http.delete<void>(`${BASE}?statementId=${this.statementId}`));
+    } catch {
+      // ignore; still clear local
+    } finally {
+      localStorage.removeItem(STORAGE_KEY);
+      this.statementId = null;
+      this.meta = null;
+
+      // Reset UI caches
+      this.prefetchCache.clear();
+      this.pendingPrefetches.clear();
+
+      if (this.gridApi) {
+        const emptyDs: IDatasource = { getRows: (p: IGetRowsParams) => p.successCallback([], 0) };
+        this.gridApi.setGridOption('datasource', emptyDs);
+        this.gridApi.purgeInfiniteCache?.();
+      }
+
+      this.showToast('Cleared cached result');
+    }
+  }
+
+  // ---------- Infinite datasource with prefetch ----------
+  private createDatasource(): IDatasource {
+    const statementId = this.statementId!;
+    const totalRows = this.meta?.rowCount ?? null;
+    const blockSize = this.cacheBlockSize;
+
+    return {
+      getRows: async (params: IGetRowsParams) => {
+        const start = params.startRow;
+        const end = params.endRow;
+
+        // 1) Serve from prefetch cache if available
+        const cached = this.prefetchCache.get(start);
+        if (cached) {
+          this.prefetchCache.delete(start);
+          const lastRow = this.resolveLastRow(null, totalRows);
+          params.successCallback(cached, lastRow);
+
+          // Prefetch the next one
+          this.maybePrefetchNext(statementId, end, blockSize, lastRow);
+          return;
+        }
+
+        // 2) Otherwise, fetch from server
+        const url = this.mkRowsUrl(statementId, start, end);
+        try {
+          const res = await this.safeGet<any>(url);
+          this.debugResponse = res;
+
+          const rows = this.mapToObjects(this.extractRows(res));
+          const lastRow = this.resolveLastRow(res, totalRows);
+
+          params.successCallback(rows, lastRow);
+
+          // 3) Prefetch next block in background
+          this.maybePrefetchNext(statementId, end, blockSize, lastRow);
+        } catch (err) {
+          console.error('getRows error', err);
+          params.failCallback();
+        }
+      },
+    };
+  }
+
+  private resolveLastRow(res: any, metaTotal: number | null): number {
+    if (typeof res?.lastRow === 'number') return res.lastRow;
+    if (typeof metaTotal === 'number') return metaTotal;
+    return -1;
+  }
+
+  private async maybePrefetchNext(
+    statementId: string,
+    nextStart: number,
+    blockSize: number,
+    lastRow: number
+  ) {
+    // Don’t prefetch past the end
+    if (lastRow >= 0 && nextStart >= lastRow) return;
+
+    if (this.prefetchCache.has(nextStart) || this.pendingPrefetches.has(nextStart)) return;
+
+    this.pendingPrefetches.add(nextStart);
+    const nextEnd = nextStart + blockSize;
+    const url = this.mkRowsUrl(statementId, nextStart, nextEnd);
+
+    try {
+      const res = await this.safeGet<any>(url);
+      const rows = this.mapToObjects(this.extractRows(res));
+
+      // Seed cache and cap its size
+      this.prefetchCache.set(nextStart, rows);
+      while (this.prefetchCache.size > this.maxPrefetchBlocks) {
+        const oldestKey = this.prefetchCache.keys().next().value;
+        if (typeof oldestKey === 'number') {
+          this.prefetchCache.delete(oldestKey);
+        }
+      }
+    } catch (e) {
+      // Ignore prefetch failures; normal requests will still work
+    } finally {
+      this.pendingPrefetches.delete(nextStart);
+    }
+  }
+
+  // ---------- Helpers ----------
+  private setupColumnsFromMeta() {
+    const colNames: string[] =
+      this.meta?.columns?.length
+        ? this.meta.columns
+        : this.meta?.schema?.length
+        ? [...this.meta.schema]
+            .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+            .map((c) => c.name)
+        : [];
+
+    if (colNames.length) {
+      this.columnDefs = colNames.map((name: string): ColDef => ({
+        headerName: name,
+        field: name,
+      }));
+      this.gridApi?.setGridOption('columnDefs', this.columnDefs);
+    }
+  }
+
+  private mapToObjects(rawRows: any[]): any[] {
+    if (!rawRows?.length) return [];
+    if (typeof rawRows[0] === 'object' && !Array.isArray(rawRows[0])) return rawRows;
+
+    const colNames = this.columnDefs.map((c) => String(c.field));
+    return rawRows.map((r: any[]) => {
+      const o: any = {};
+      for (let i = 0; i < colNames.length; i++) o[colNames[i]] = r?.[i];
+      return o;
+    });
   }
 
   private mkRowsUrl(statementId: string, start: number, end: number) {
@@ -158,14 +365,16 @@ export class AppComponent {
     while (true) {
       let meta: Meta;
       try {
-        meta = await firstValueFrom(this.http.get<Meta>(`${BASE}/statement?statementId=${statementId}`));
+        meta = await firstValueFrom(
+          this.http.get<Meta>(`${BASE}/statement?statementId=${statementId}`)
+        );
       } catch {
         if (Date.now() - start > timeoutMs) throw new Error('Timed out waiting for statement meta.');
         await this.delay(intervalMs);
         continue;
       }
       const state = (meta.state ?? '').toUpperCase();
-      if (typeof meta.rowCount === 'number') return meta; // treat counts as "ready" too
+      if (typeof meta.rowCount === 'number') return meta;
       if (['SUCCEEDED', 'DONE', 'COMPLETED'].includes(state)) return meta;
       if (Date.now() - start > timeoutMs) throw new Error('Timed out waiting for statement meta.');
       await this.delay(intervalMs);
@@ -173,25 +382,32 @@ export class AppComponent {
   }
 
   private extractRows(res: any): any[] {
-    // Try common shapes first
     if (Array.isArray(res?.rows)) return res.rows;
     if (Array.isArray(res?.data)) return res.data;
     if (Array.isArray(res?.result)) return res.result;
     if (Array.isArray(res)) return res;
 
-    // Some APIs return chunks; pick first non-empty chunk
     if (Array.isArray(res?.chunks)) {
       for (const ch of res.chunks) {
         const rows = ch?.rows || ch?.data || ch?.result;
         if (Array.isArray(rows) && rows.length) return rows;
       }
     }
-    // Last resort: null/undefined -> []
     return [];
   }
 
   private delay(ms: number) {
-    return new Promise(res => setTimeout(res, ms));
+    return new Promise((res) => setTimeout(res, ms));
+  }
+
+  private showToast(msg: string, ms = 3000) {
+    this.toast.msg = msg;
+    this.toast.visible = true;
+    if (this.toast.timer) clearTimeout(this.toast.timer);
+    this.toast.timer = setTimeout(() => {
+      this.toast.visible = false;
+      this.toast.timer = null;
+    }, ms);
   }
 
   private normalizeHttpError(err: unknown): string {
@@ -200,6 +416,10 @@ export class AppComponent {
       return `${err.status} ${err.statusText} — ${err.url}\n${body}`;
     }
     if (err instanceof Error) return err.message;
-    try { return JSON.stringify(err); } catch { return String(err); }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
   }
 }
