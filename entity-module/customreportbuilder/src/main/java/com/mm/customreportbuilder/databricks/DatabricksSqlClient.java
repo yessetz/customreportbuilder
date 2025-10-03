@@ -140,11 +140,24 @@ public class DatabricksSqlClient {
                                     }
                                 }
                             } else {
-                                int count = (totalChunkCount != null && totalChunkCount > 0) ? totalChunkCount : 1;
+                                int count;
+                                if (totalChunkCount != null && totalChunkCount > 0) {
+                                    count = totalChunkCount;
+                                } else if (totalRows != null && pageSize > 0) {
+                                    count = Math.max(1, (totalRows + pageSize - 1) / pageSize); // ceil(totalRows / pageSize)
+                                } else {
+                                    count = 1;
+                                }
+
+                                log.debug("No external_links; totalRows={} pageSize={} totalChunkCount={} → fetching {} chunks",
+                                        totalRows, pageSize, totalChunkCount, count);
+
                                 for (int i = 0; i < count; i++) {
                                     List<List<Object>> rows = fetchChunk(statementId, i, pageSize);
                                     if (!rows.isEmpty()) {
                                         listener.onChunk(i, rows, totalRows, state);
+                                    } else {
+                                        log.debug("Chunk {} returned empty rows", i);
                                     }
                                 }
                             }
