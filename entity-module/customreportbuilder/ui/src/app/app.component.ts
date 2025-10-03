@@ -28,8 +28,8 @@ type Meta = {
   standalone: true,
   imports: [AgGridAngular],
   template: `
-    <div style="padding:12px;">
-      <h3>Databricks → Redis → API → Grid (infinite model)</h3>
+    <div style="padding:12px; position: relative;">
+      <h3>Databricks → Redis → API → Grid (infinite + prefetch)</h3>
 
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
         <button (click)="run()" [disabled]="loading">
@@ -39,8 +39,6 @@ type Meta = {
         <button *ngIf="statementId" (click)="clearResume()" [disabled]="loading" title="Forget cached result">
           Clear resume
         </button>
-
-        <span *ngIf="resumeNotice && !loading" style="font-size:12px; opacity:0.8;">{{ resumeNotice }}</span>
       </div>
 
       <p *ngIf="error" style="color:#b00; white-space:pre-wrap; margin-top:8px;">
@@ -63,6 +61,7 @@ type Meta = {
           [rowModelType]="'infinite'"
           [cacheBlockSize]="cacheBlockSize"
           [maxBlocksInCache]="maxBlocksInCache"
+          [maxConcurrentDatasourceRequests]="maxConcurrentDatasourceRequests"
           [columnDefs]="columnDefs"
           [defaultColDef]="defaultColDef"
           (gridReady)="onGridReady($event)"
@@ -70,9 +69,20 @@ type Meta = {
         </ag-grid-angular>
       </div>
 
+      <!-- Debug (last server response) -->
       <div *ngIf="debugResponse" style="margin-top:12px;">
         <strong>last rows response (debug)</strong>
         <pre>{{ debugResponse | json }}</pre>
+      </div>
+
+      <!-- Tiny toast -->
+      <div
+        *ngIf="toast.visible"
+        style="
+          position: fixed; right: 16px; bottom: 16px;
+          background: rgba(0,0,0,0.85); color: #fff;
+          padding: 10px 12px; border-radius: 8px; font-size: 13px;">
+        {{ toast.msg }}
       </div>
     </div>
   `,
@@ -95,10 +105,18 @@ export class AppComponent implements OnInit {
   // Infinite model settings (synced to server page size)
   cacheBlockSize = 500; // default until meta arrives
   maxBlocksInCache = 4; // tune as desired
+  maxConcurrentDatasourceRequests = 2; // allow overlap (helps when user scrolls fast)
+
+  // Prefetch cache for next block (startRow -> rows[])
+  private prefetchCache = new Map<number, any[]>();
+  private pendingPrefetches = new Set<number>();
+  private maxPrefetchBlocks = 2; // keep at most N prefetched blocks in memory
 
   // Debug
   debugResponse: any = null;
-  resumeNotice = '';
+
+  // Toast
+  toast = { visible: false, msg: '', timer: null as any };
 
   // ---------- Lifecycle: resume on reload ----------
   async ngOnInit() {
@@ -107,7 +125,6 @@ export class AppComponent implements OnInit {
 
     try {
       this.loading = true;
-      this.resumeNotice = 'Resuming last result…';
       this.statementId = last;
 
       // Short poll for meta
@@ -117,18 +134,16 @@ export class AppComponent implements OnInit {
       this.setupColumnsFromMeta();
       this.cacheBlockSize = this.meta?.pageSize ?? 500;
 
-      // If grid is already ready, attach datasource now
       if (this.gridApi) {
         this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
         this.gridApi.setGridOption('datasource', this.createDatasource());
       }
 
-      this.resumeNotice = 'Resumed from previous result.';
+      this.showToast('Resumed previous result');
     } catch {
       localStorage.removeItem(STORAGE_KEY);
       this.statementId = null;
       this.meta = null;
-      this.resumeNotice = '';
     } finally {
       this.loading = false;
     }
@@ -139,7 +154,6 @@ export class AppComponent implements OnInit {
     this.gridApi = e.api;
 
     if (this.statementId && this.meta) {
-      // If resume logic already set everything up
       this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
       this.gridApi.setGridOption('datasource', this.createDatasource());
     }
@@ -150,11 +164,13 @@ export class AppComponent implements OnInit {
     this.error = '';
     this.debugResponse = null;
 
-    // Reset grid cache / datasource to empty until new one is set
+    // Reset all caches
+    this.prefetchCache.clear();
+    this.pendingPrefetches.clear();
+
+    // Reset grid
     if (this.gridApi) {
-      const emptyDs: IDatasource = {
-        getRows: (p: IGetRowsParams) => p.successCallback([], 0),
-      };
+      const emptyDs: IDatasource = { getRows: (p: IGetRowsParams) => p.successCallback([], 0) };
       this.gridApi.setGridOption('datasource', emptyDs);
       this.gridApi.purgeInfiniteCache?.();
     }
@@ -182,6 +198,7 @@ export class AppComponent implements OnInit {
         this.gridApi.setGridOption('datasource', this.createDatasource());
       }
 
+      this.showToast('Query started');
     } catch (err) {
       this.error = this.normalizeHttpError(err);
       console.error('run() failed:', err);
@@ -201,48 +218,100 @@ export class AppComponent implements OnInit {
       this.statementId = null;
       this.meta = null;
 
-      // Reset grid view to empty datasource
+      // Reset UI caches
+      this.prefetchCache.clear();
+      this.pendingPrefetches.clear();
+
       if (this.gridApi) {
         const emptyDs: IDatasource = { getRows: (p: IGetRowsParams) => p.successCallback([], 0) };
         this.gridApi.setGridOption('datasource', emptyDs);
         this.gridApi.purgeInfiniteCache?.();
       }
 
-      this.resumeNotice = '';
+      this.showToast('Cleared cached result');
     }
   }
 
-  // ---------- Infinite datasource ----------
+  // ---------- Infinite datasource with prefetch ----------
   private createDatasource(): IDatasource {
     const statementId = this.statementId!;
     const totalRows = this.meta?.rowCount ?? null;
+    const blockSize = this.cacheBlockSize;
 
     return {
       getRows: async (params: IGetRowsParams) => {
         const start = params.startRow;
         const end = params.endRow;
-        const url = this.mkRowsUrl(statementId, start, end);
 
+        // 1) Serve from prefetch cache if available
+        const cached = this.prefetchCache.get(start);
+        if (cached) {
+          this.prefetchCache.delete(start);
+          const lastRow = this.resolveLastRow(null, totalRows);
+          params.successCallback(cached, lastRow);
+
+          // Prefetch the next one
+          this.maybePrefetchNext(statementId, end, blockSize, lastRow);
+          return;
+        }
+
+        // 2) Otherwise, fetch from server
+        const url = this.mkRowsUrl(statementId, start, end);
         try {
           const res = await this.safeGet<any>(url);
           this.debugResponse = res;
 
           const rows = this.mapToObjects(this.extractRows(res));
-
-          const lastRow =
-            typeof res?.lastRow === 'number'
-              ? res.lastRow
-              : typeof totalRows === 'number'
-              ? totalRows
-              : -1; // unknown
+          const lastRow = this.resolveLastRow(res, totalRows);
 
           params.successCallback(rows, lastRow);
+
+          // 3) Prefetch next block in background
+          this.maybePrefetchNext(statementId, end, blockSize, lastRow);
         } catch (err) {
           console.error('getRows error', err);
           params.failCallback();
         }
       },
     };
+  }
+
+  private resolveLastRow(res: any, metaTotal: number | null): number {
+    if (typeof res?.lastRow === 'number') return res.lastRow;
+    if (typeof metaTotal === 'number') return metaTotal;
+    return -1;
+  }
+
+  private async maybePrefetchNext(
+    statementId: string,
+    nextStart: number,
+    blockSize: number,
+    lastRow: number
+  ) {
+    // Don’t prefetch past the end
+    if (lastRow >= 0 && nextStart >= lastRow) return;
+
+    if (this.prefetchCache.has(nextStart) || this.pendingPrefetches.has(nextStart)) return;
+
+    this.pendingPrefetches.add(nextStart);
+    const nextEnd = nextStart + blockSize;
+    const url = this.mkRowsUrl(statementId, nextStart, nextEnd);
+
+    try {
+      const res = await this.safeGet<any>(url);
+      const rows = this.mapToObjects(this.extractRows(res));
+
+      // Seed cache and cap its size
+      this.prefetchCache.set(nextStart, rows);
+      while (this.prefetchCache.size > this.maxPrefetchBlocks) {
+        const oldestKey = this.prefetchCache.keys().next().value;
+        this.prefetchCache.delete(oldestKey);
+      }
+    } catch (e) {
+      // Ignore prefetch failures; normal requests will still work
+    } finally {
+      this.pendingPrefetches.delete(nextStart);
+    }
   }
 
   // ---------- Helpers ----------
@@ -267,17 +336,12 @@ export class AppComponent implements OnInit {
 
   private mapToObjects(rawRows: any[]): any[] {
     if (!rawRows?.length) return [];
-    // Already objects?
-    if (typeof rawRows[0] === 'object' && !Array.isArray(rawRows[0])) {
-      return rawRows;
-    }
-    // Convert arrays → objects using current columnDefs
+    if (typeof rawRows[0] === 'object' && !Array.isArray(rawRows[0])) return rawRows;
+
     const colNames = this.columnDefs.map((c) => String(c.field));
     return rawRows.map((r: any[]) => {
       const o: any = {};
-      for (let i = 0; i < colNames.length; i++) {
-        o[colNames[i]] = r?.[i];
-      }
+      for (let i = 0; i < colNames.length; i++) o[colNames[i]] = r?.[i];
       return o;
     });
   }
@@ -287,7 +351,6 @@ export class AppComponent implements OnInit {
     p.set('statementId', statementId);
     p.set('startRow', String(start));
     p.set('endRow', String(end));
-    // rows endpoint is GET on "/api/reports"
     return `${BASE}?${p.toString()}`;
   }
 
@@ -333,6 +396,16 @@ export class AppComponent implements OnInit {
 
   private delay(ms: number) {
     return new Promise((res) => setTimeout(res, ms));
+  }
+
+  private showToast(msg: string, ms = 3000) {
+    this.toast.msg = msg;
+    this.toast.visible = true;
+    if (this.toast.timer) clearTimeout(this.toast.timer);
+    this.toast.timer = setTimeout(() => {
+      this.toast.visible = false;
+      this.toast.timer = null;
+    }, ms);
   }
 
   private normalizeHttpError(err: unknown): string {
