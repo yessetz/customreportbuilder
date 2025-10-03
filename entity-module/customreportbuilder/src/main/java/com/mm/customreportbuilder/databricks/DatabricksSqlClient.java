@@ -140,24 +140,19 @@ public class DatabricksSqlClient {
                                     }
                                 }
                             } else {
-                                int count;
-                                if (totalChunkCount != null && totalChunkCount > 0) {
-                                    count = totalChunkCount;
-                                } else if (totalRows != null && pageSize > 0) {
-                                    count = Math.max(1, (totalRows + pageSize - 1) / pageSize); // ceil(totalRows / pageSize)
-                                } else {
-                                    count = 1;
-                                }
+                                int dbChunkCount = (totalChunkCount != null && totalChunkCount > 0) ? totalChunkCount : 1;
 
-                                log.debug("No external_links; totalRows={} pageSize={} totalChunkCount={} → fetching {} chunks",
-                                        totalRows, pageSize, totalChunkCount, count);
+                                log.debug("Streaming DB chunks without external links: totalRows={} pageSize={} totalChunkCount(db)={} ",
+                                        totalRows, pageSize, dbChunkCount);
 
-                                for (int i = 0; i < count; i++) {
-                                    List<List<Object>> rows = fetchChunk(statementId, i, pageSize);
-                                    if (!rows.isEmpty()) {
-                                        listener.onChunk(i, rows, totalRows, state);
-                                    } else {
-                                        log.debug("Chunk {} returned empty rows", i);
+                                for (int dbIndex = 0; dbIndex < dbChunkCount; dbIndex++) {
+                                    // IMPORTANT: dbIndex is the *Databricks* chunk index, not our 500-row page index.
+                                    List<List<Object>> dbRows = fetchChunk(statementId, dbIndex, pageSize /*unused for DB index; kept for signature stability*/);
+                                    int size = (dbRows == null) ? 0 : dbRows.size();
+                                    log.debug("Fetched DB chunk {} with {} rows", dbIndex, size);
+
+                                    if (dbRows != null && !dbRows.isEmpty()) {
+                                        listener.onChunk(dbIndex, dbRows, totalRows, state);
                                     }
                                 }
                             }

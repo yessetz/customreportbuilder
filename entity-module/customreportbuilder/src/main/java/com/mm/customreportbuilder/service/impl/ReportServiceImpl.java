@@ -9,6 +9,7 @@ import java.util.*;
 import com.mm.customreportbuilder.service.ReportService;
 import com.mm.customreportbuilder.databricks.DatabricksSqlClient;
 import com.mm.customreportbuilder.cache.ChunkCacheService;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class ReportServiceImpl implements ReportService {
@@ -37,12 +38,24 @@ public class ReportServiceImpl implements ReportService {
         String statementId = client.submitStatement(sql);
         DatabricksSqlClient.SchemaInfo schemaInfo = client.getSchema(statementId);
         cache.putMeta(userId, statementId, PAGE_SIZE, null, schemaInfo.columnNames(), schemaInfo.columnMeta(), "PENDING");
-
+        final AtomicInteger nextPageIndex = new AtomicInteger(0);
         client.streamChunks(statementId, PAGE_SIZE, (chunkIndex, rows, totalRows, state) -> {
+            // chunkIndex == -1 is used for meta/state notifications — skip data handling
             if (chunkIndex >= 0 && rows != null && !rows.isEmpty()) {
-                cache.putChunk(userId, statementId, chunkIndex, rows);
-                log.debug("STORED chunk={} rows={} statementId={}", chunkIndex, rows.size(), statementId);
+                // Re-slice the Databricks DB chunk (often ~10k rows, sometimes smaller) into 500-row pages
+                for (int offset = 0; offset < rows.size(); offset += PAGE_SIZE) {
+                    int to = Math.min(offset + PAGE_SIZE, rows.size());
+                    int pageIdx = nextPageIndex.getAndIncrement();
+
+                    List<List<Object>> pageRows = rows.subList(offset, to);
+                    cache.putChunk(userId, statementId, pageIdx, pageRows);
+
+                    log.debug("STORED page chunk={} rows={} statementId={} (from dbChunkIndex={})",
+                            pageIdx, pageRows.size(), statementId, chunkIndex);
+                }
             }
+
+            // Keep pushing meta updates (rowCount/state) as they arrive
             if (totalRows != null || state != null) {
                 cache.putMeta(userId, statementId, PAGE_SIZE, totalRows, null, null, state);
             }
