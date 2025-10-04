@@ -127,10 +127,16 @@ public class ReportServiceImpl implements ReportService {
             int to = Math.min(from + toTake, buffer.size());
             page = buffer.subList(from, to);
         }
-
+        
         return Map.of("rows", page, "lastRow", rowCount);
     }
 
+    @Override
+    public Map<String, Object> getRows(String statementId, int startRow, int endRow, String sortModelJson, String filterModelJson) {
+        // Step 1: ignore sort/filter (no behavior change). We’ll honor these in Step 4.
+        return getRows(statementId, startRow, endRow);
+    }
+    
     @Override
     public void evict(String statementId) {
         cache.invalidateStatement("local", statementId);

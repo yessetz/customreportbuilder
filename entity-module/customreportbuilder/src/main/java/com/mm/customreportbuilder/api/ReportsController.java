@@ -42,7 +42,7 @@ public class ReportsController {
         if (statementId == null || statementId.isBlank()) {
             throw new IllegalArgumentException("statementId must not be blank");
         }
-        return ResponseEntity.ok(reportService.getRows(statementId, startRow, endRow));
+        return ResponseEntity.ok(reportService.getRows(statementId, startRow, endRow, sortModel, filterModel));
     }
 
     @DeleteMapping
