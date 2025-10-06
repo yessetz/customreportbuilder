@@ -65,6 +65,8 @@ type Meta = {
           [columnDefs]="columnDefs"
           [defaultColDef]="defaultColDef"
           (gridReady)="onGridReady($event)"
+          (sortChanged)="onSortChanged()"          
+          (filterChanged)="onFilterChanged()"   
           style="color: black; width: 100%; height: 700px;">
         </ag-grid-angular>
       </div>
@@ -159,6 +161,27 @@ export class AppComponent implements OnInit {
     }
   }
 
+  onSortChanged() {
+    // New sort → invalidate local prefetch & grid cache
+    this.prefetchCache.clear();
+    this.pendingPrefetches.clear();
+    this.debugResponse = null;
+    this.gridApi?.purgeInfiniteCache?.();
+
+    // Tiny toast to show we’re refreshing (server may build the view the first time)
+    this.showToast('Applying sort…', 900);
+  }
+
+  onFilterChanged() {
+    // New filters → invalidate caches and refetch
+    this.prefetchCache.clear();
+    this.pendingPrefetches.clear();
+    this.debugResponse = null;
+    this.gridApi?.purgeInfiniteCache?.();
+
+    this.showToast('Applying filter…', 900);
+  }
+
   async run() {
     this.loading = true;
     this.error = '';
@@ -243,6 +266,10 @@ export class AppComponent implements OnInit {
         const start = params.startRow;
         const end = params.endRow;
 
+        // NEW: capture current models from AG Grid
+        const sortModelJson   = JSON.stringify(params.sortModel ?? []);
+        const filterModelJson = JSON.stringify(params.filterModel ?? {});
+
         // 1) Serve from prefetch cache if available
         const cached = this.prefetchCache.get(start);
         if (cached) {
@@ -250,13 +277,13 @@ export class AppComponent implements OnInit {
           const lastRow = this.resolveLastRow(null, totalRows);
           params.successCallback(cached, lastRow);
 
-          // Prefetch the next one
-          this.maybePrefetchNext(statementId, end, blockSize, lastRow);
+          // Prefetch the next one (with the same models)
+          this.maybePrefetchNext(statementId, end, blockSize, lastRow, sortModelJson, filterModelJson);
           return;
         }
 
-        // 2) Otherwise, fetch from server
-        const url = this.mkRowsUrl(statementId, start, end);
+        // 2) Otherwise, fetch from server (include models)
+        const url = this.mkRowsUrl(statementId, start, end, sortModelJson, filterModelJson);
         try {
           const res = await this.safeGet<any>(url);
           this.debugResponse = res;
@@ -266,14 +293,15 @@ export class AppComponent implements OnInit {
 
           params.successCallback(rows, lastRow);
 
-          // 3) Prefetch next block in background
-          this.maybePrefetchNext(statementId, end, blockSize, lastRow);
+          // 3) Prefetch next block in background (include models)
+          this.maybePrefetchNext(statementId, end, blockSize, lastRow, sortModelJson, filterModelJson);
         } catch (err) {
           console.error('getRows error', err);
           params.failCallback();
         }
       },
     };
+
   }
 
   private resolveLastRow(res: any, metaTotal: number | null): number {
@@ -286,31 +314,31 @@ export class AppComponent implements OnInit {
     statementId: string,
     nextStart: number,
     blockSize: number,
-    lastRow: number
+    lastRow: number,
+    sortModelJson?: string,
+    filterModelJson?: string
   ) {
     // Don’t prefetch past the end
     if (lastRow >= 0 && nextStart >= lastRow) return;
-
     if (this.prefetchCache.has(nextStart) || this.pendingPrefetches.has(nextStart)) return;
 
     this.pendingPrefetches.add(nextStart);
     const nextEnd = nextStart + blockSize;
-    const url = this.mkRowsUrl(statementId, nextStart, nextEnd);
+
+    // Include models so view caching matches the visible data
+    const url = this.mkRowsUrl(statementId, nextStart, nextEnd, sortModelJson, filterModelJson);
 
     try {
       const res = await this.safeGet<any>(url);
       const rows = this.mapToObjects(this.extractRows(res));
 
-      // Seed cache and cap its size
       this.prefetchCache.set(nextStart, rows);
       while (this.prefetchCache.size > this.maxPrefetchBlocks) {
         const oldestKey = this.prefetchCache.keys().next().value;
-        if (typeof oldestKey === 'number') {
-          this.prefetchCache.delete(oldestKey);
-        }
+        if (typeof oldestKey === 'number') this.prefetchCache.delete(oldestKey);
       }
-    } catch (e) {
-      // Ignore prefetch failures; normal requests will still work
+    } catch {
+      // ignore prefetch failures
     } finally {
       this.pendingPrefetches.delete(nextStart);
     }
@@ -348,11 +376,24 @@ export class AppComponent implements OnInit {
     });
   }
 
-  private mkRowsUrl(statementId: string, start: number, end: number) {
+  private mkRowsUrl(
+    statementId: string,
+    start: number,
+    end: number,
+    sortModelJson?: string | null,
+    filterModelJson?: string | null
+  ) {
     const p = new URLSearchParams();
     p.set('statementId', statementId);
     p.set('startRow', String(start));
     p.set('endRow', String(end));
+
+    // Only send if non-empty to avoid needless cache forks on the server
+    if (sortModelJson && sortModelJson !== '[]') p.set('sortModel', sortModelJson);
+    if (filterModelJson && filterModelJson !== '{}' && filterModelJson !== 'null') {
+      p.set('filterModel', filterModelJson);
+    }
+
     return `${BASE}?${p.toString()}`;
   }
 
