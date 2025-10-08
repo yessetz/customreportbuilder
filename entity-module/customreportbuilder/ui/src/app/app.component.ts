@@ -100,6 +100,7 @@ export class AppComponent implements OnInit {
 
   // AG Grid
   private gridApi: GridApi | null = null;
+  private _lastModelSig: string | null = null; // for debug
 
   columnDefs: ColDef[] = [];
   defaultColDef: ColDef = { resizable: true, sortable: true, filter: true, flex: 1, minWidth: 120 };
@@ -162,14 +163,15 @@ export class AppComponent implements OnInit {
   }
 
   onSortChanged() {
-    // New sort → invalidate local prefetch & grid cache
-    this.prefetchCache.clear();
-    this.pendingPrefetches.clear();
-    this.debugResponse = null;
+    // if you keep a local prefetch cache, clear it
+    this.prefetchCache?.clear?.();
+    this.pendingPrefetches?.clear?.();
+
+    // Force AG Grid Infinite Row Model to refetch rows for the new sort
     this.gridApi?.purgeInfiniteCache?.();
 
-    // Tiny toast to show we’re refreshing (server may build the view the first time)
-    this.showToast('Applying sort…', 900);
+    // (optional) tiny feedback
+    // this.showToast?.('Applying sort…', 900);
   }
 
   onFilterChanged() {
@@ -269,6 +271,21 @@ export class AppComponent implements OnInit {
         // NEW: capture current models from AG Grid
         const sortModelJson   = JSON.stringify(params.sortModel ?? []);
         const filterModelJson = JSON.stringify(params.filterModel ?? {});
+
+        // Guard: if the model changed since last call, dump any stale prefetch blocks
+        const currentSig = `${sortModelJson}|${filterModelJson}`;
+        if (this._lastModelSig !== currentSig) {
+          this.prefetchCache.clear();
+          this.pendingPrefetches.clear();
+          this._lastModelSig = currentSig;
+        }
+
+        const p = new URLSearchParams();
+        p.set('statementId', statementId);
+        p.set('startRow', String(params.startRow));
+        p.set('endRow', String(params.endRow));
+        if (sortModelJson !== '[]')       p.set('sortModel', sortModelJson);
+        if (filterModelJson !== '{}')     p.set('filterModel', filterModelJson);
 
         // 1) Serve from prefetch cache if available
         const cached = this.prefetchCache.get(start);
