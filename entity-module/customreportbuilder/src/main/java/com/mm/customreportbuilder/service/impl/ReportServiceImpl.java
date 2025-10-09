@@ -185,16 +185,6 @@ public class ReportServiceImpl implements ReportService {
             return getRows(statementId, startRow, endRow);
         }
 
-        // Compute signature for this (stmt, sort, filter)
-        String sig = viewCache.computeSignature(statementId, parsed.getCanonicalSortJson(), parsed.getCanonicalFilterJson());
-
-        // If the view exists, slice and return
-        Map<String, Object> viewMeta = viewCache.getMeta(userId, statementId, sig);
-        if (viewMeta != null) {
-            int ps = ((Number) viewMeta.getOrDefault("pageSize", PAGE_SIZE)).intValue();
-            return sliceFromView(userId, statementId, sig, startRow, endRow, ps);
-        }
-
         // Build the view (first time) from base pages
         Map<String, Object> baseMeta = cache.getMeta(userId, statementId);
         if (baseMeta == null) {
@@ -221,8 +211,9 @@ public class ReportServiceImpl implements ReportService {
             }
         }
 
-        // Coerce allowed columns for parsing (now we know columns)
-        parsed = AgGridModelParser.parse(sortModelJson, filterModelJson, colIndex.keySet());
+        // Use raw parse so we don't drop legit filters by name format;
+        // binding to actual columns is handled in rowMatchesFilters via colIndex (orig/lower/collapsed).
+        parsed = AgGridModelParser.parse(sortModelJson, filterModelJson, null);
         hasSort = parsed.getSortModel() != null && !parsed.getSortModel().isEmpty();
         hasFilter = parsed.getFilterModel() != null && !parsed.getFilterModel().isEmpty();
 
@@ -236,11 +227,22 @@ public class ReportServiceImpl implements ReportService {
             }
         }
 
-        // If after rescue we still have neither, return base.
-        if (!hasSort && !hasFilter) {
-            return getRows(statementId, startRow, endRow);
-        }
+        // Final signature & cache check (AFTER normalization/rescue & final parse)
+        final String sig = viewCache.computeSignature(
+                statementId,
+                parsed.getCanonicalSortJson(),
+                parsed.getCanonicalFilterJson()
+        );
 
+        log.debug("final sort JSON:   {}", parsed.getCanonicalSortJson());
+        log.debug("final filter JSON: {}", parsed.getCanonicalFilterJson());
+        log.debug("final filter keys: {}", parsed.getFilterModel() == null ? "null" : parsed.getFilterModel().keySet());
+
+        Map<String, Object> viewMeta = viewCache.getMeta(userId, statementId, sig);
+        if (viewMeta != null) {
+            int ps = ((Number) viewMeta.getOrDefault("pageSize", PAGE_SIZE)).intValue();
+            return sliceFromView(userId, statementId, sig, startRow, endRow, ps);
+        }
 
         log.debug("rows sig: stmt={} sortPresentRaw={} filterPresentRaw={} hasSort={} hasFilter={} cols={}", statementId, sortPresentRaw, filterPresentRaw, hasSort, hasFilter, colIndex.keySet());
 
