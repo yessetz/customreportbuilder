@@ -213,11 +213,11 @@ public class ReportServiceImpl implements ReportService {
         int maxPagesToScan = (rowCount != null) ? Math.max(0, (rowCount + pageSize - 1) / pageSize)
                                                 : VIEW_MAX_SCAN_PAGES;
 
-        // If client sent a filter, normalize its keys to actual column ids (case-insensitive)
+        // If client sent a filter, normalize its keys to match actual column ids (case/format-insensitive)
         if (filterPresentRaw) {
             String normalized = normalizeFilterKeys(filterModelJson, colIndex.keySet());
             if (normalized != null) {
-                filterModelJson = normalized; // use normalized JSON downstream (also affects view signature)
+                filterModelJson = normalized; // use normalized JSON in the allowed-columns parse and for view building
             }
         }
 
@@ -574,7 +574,7 @@ public class ReportServiceImpl implements ReportService {
         return sa.compareToIgnoreCase(sb);
     }
 
-    // Normalize incoming filterModel keys to match actual columns (case-insensitive).
+    // Normalize incoming filterModel keys to actual column ids (case/format-insensitive).
     private String normalizeFilterKeys(String filterModelJson, java.util.Set<String> cols) {
         if (filterModelJson == null || filterModelJson.isBlank()) return null;
         try {
@@ -584,15 +584,29 @@ public class ReportServiceImpl implements ReportService {
             java.util.Map<String, Object> raw = mapper.readValue(filterModelJson, typeRef);
             if (raw == null || raw.isEmpty()) return null;
 
-            java.util.Map<String, String> lowerToActual = new java.util.HashMap<>();
-            for (String c : cols) if (c != null) lowerToActual.put(c.toLowerCase(java.util.Locale.ROOT), c);
+            // Build lookups for server columns:
+            //  - lower-case     (e.g., "companyname")
+            //  - collapsed form (remove non-alphanumerics) (e.g., "company_name" -> "companyname")
+            java.util.Map<String, String> byLower = new java.util.HashMap<>();
+            java.util.Map<String, String> byCollapsed = new java.util.HashMap<>();
+            for (String c : cols) {
+                if (c == null) continue;
+                String lower = c.toLowerCase(java.util.Locale.ROOT);
+                String collapsed = lower.replaceAll("[^a-z0-9]", "");
+                byLower.put(lower, c);
+                byCollapsed.put(collapsed, c);
+            }
 
             java.util.Map<String, Object> normalized = new java.util.LinkedHashMap<>();
             for (var e : raw.entrySet()) {
                 if (e.getKey() == null) continue;
-                String actual = lowerToActual.get(e.getKey().toLowerCase(java.util.Locale.ROOT));
+                String kLower = e.getKey().toLowerCase(java.util.Locale.ROOT);
+                String kCollapsed = kLower.replaceAll("[^a-z0-9]", "");
+                String actual = byLower.get(kLower);
+                if (actual == null) actual = byCollapsed.get(kCollapsed);
                 if (actual != null) normalized.put(actual, e.getValue());
             }
+
             if (normalized.isEmpty()) return null;
             return mapper.writeValueAsString(normalized);
         } catch (Exception ignore) {
