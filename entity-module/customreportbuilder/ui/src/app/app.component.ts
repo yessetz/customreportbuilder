@@ -405,11 +405,13 @@ export class AppComponent implements OnInit {
     p.set('startRow', String(start));
     p.set('endRow', String(end));
 
-    // Only send if non-empty to avoid needless cache forks on the server
-    if (sortModelJson && sortModelJson !== '[]') p.set('sortModel', sortModelJson);
-    if (filterModelJson && filterModelJson !== '{}' && filterModelJson !== 'null') {
-      p.set('filterModel', filterModelJson);
-    }
+    // Normalize to canonical empties so the backend consistently sees BOTH params.
+    // This prevents “works only when both” sequences and avoids 'null' strings.
+    const sortParam   = (sortModelJson && sortModelJson !== 'null') ? sortModelJson : '[]';
+    const filterParam = (filterModelJson && filterModelJson !== 'null') ? filterModelJson : '{}';
+
+    p.set('sortModel', sortParam);
+    p.set('filterModel', filterParam);
 
     return `${BASE}?${p.toString()}`;
   }
