@@ -213,10 +213,19 @@ public class ReportServiceImpl implements ReportService {
         int maxPagesToScan = (rowCount != null) ? Math.max(0, (rowCount + pageSize - 1) / pageSize)
                                                 : VIEW_MAX_SCAN_PAGES;
 
+        // If client sent a filter, normalize its keys to actual column ids (case-insensitive)
+        if (filterPresentRaw) {
+            String normalized = normalizeFilterKeys(filterModelJson, colIndex.keySet());
+            if (normalized != null) {
+                filterModelJson = normalized; // use normalized JSON downstream (also affects view signature)
+            }
+        }
+
         // Coerce allowed columns for parsing (now we know columns)
         parsed = AgGridModelParser.parse(sortModelJson, filterModelJson, colIndex.keySet());
         hasSort = parsed.getSortModel() != null && !parsed.getSortModel().isEmpty();
         hasFilter = parsed.getFilterModel() != null && !parsed.getFilterModel().isEmpty();
+
         // If allowlist pruned everything but the client DID ask for at least one model,
         // proceed with base-slice BUT still honor the other side if present.
         // (This prevents “do nothing” when only one model is valid.)
@@ -563,5 +572,31 @@ public class ReportServiceImpl implements ReportService {
         String sa = String.valueOf(a);
         String sb = String.valueOf(b);
         return sa.compareToIgnoreCase(sb);
+    }
+
+    // Normalize incoming filterModel keys to match actual columns (case-insensitive).
+    private String normalizeFilterKeys(String filterModelJson, java.util.Set<String> cols) {
+        if (filterModelJson == null || filterModelJson.isBlank()) return null;
+        try {
+            com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>> typeRef =
+                    new com.fasterxml.jackson.core.type.TypeReference<>() {};
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            java.util.Map<String, Object> raw = mapper.readValue(filterModelJson, typeRef);
+            if (raw == null || raw.isEmpty()) return null;
+
+            java.util.Map<String, String> lowerToActual = new java.util.HashMap<>();
+            for (String c : cols) if (c != null) lowerToActual.put(c.toLowerCase(java.util.Locale.ROOT), c);
+
+            java.util.Map<String, Object> normalized = new java.util.LinkedHashMap<>();
+            for (var e : raw.entrySet()) {
+                if (e.getKey() == null) continue;
+                String actual = lowerToActual.get(e.getKey().toLowerCase(java.util.Locale.ROOT));
+                if (actual != null) normalized.put(actual, e.getValue());
+            }
+            if (normalized.isEmpty()) return null;
+            return mapper.writeValueAsString(normalized);
+        } catch (Exception ignore) {
+            return null; // fall back gracefully
+        }
     }
 }
