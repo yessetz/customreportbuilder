@@ -28,16 +28,27 @@ public final class AgGridModelParser {
         List<SortModelEntry> sortModel = parseSort(sortModelJson);
         Map<String, FilterDescriptor> filterModel = parseFilter(filterModelJson);
 
-        // Light validation: remove entries whose colId is not in allowed set (if provided)
+        // Light validation with case-insensitive matching if allowed set is provided
         if (allowedColumnIds != null && !allowedColumnIds.isEmpty()) {
+            Set<String> allowedLower = allowedColumnIds.stream()
+                    .filter(Objects::nonNull)
+                    .map(s -> s.toLowerCase(Locale.ROOT))
+                    .collect(Collectors.toSet());
+
             sortModel = sortModel.stream()
-                    .filter(s -> s.getColId() != null && allowedColumnIds.contains(s.getColId()))
+                    .filter(s -> s.getColId() != null && allowedLower.contains(s.getColId().toLowerCase(Locale.ROOT)))
                     .collect(Collectors.toList());
 
-            filterModel = filterModel.entrySet().stream()
-                    .filter(e -> e.getKey() != null && allowedColumnIds.contains(e.getKey()))
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a,b) -> a, LinkedHashMap::new));
+            Map<String, FilterDescriptor> filtered = new LinkedHashMap<>();
+            for (Map.Entry<String, FilterDescriptor> e : filterModel.entrySet()) {
+                String k = e.getKey();
+                if (k != null && allowedLower.contains(k.toLowerCase(Locale.ROOT))) {
+                    filtered.put(k, e.getValue());
+                }
+            }
+            filterModel = filtered;
         }
+
 
         // Canonical JSON (stable field order)
         String canonicalSort = writeJsonQuietly(sortModel);

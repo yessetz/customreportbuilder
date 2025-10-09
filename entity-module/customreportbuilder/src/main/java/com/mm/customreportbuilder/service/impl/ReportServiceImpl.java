@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.mm.customreportbuilder.service.ReportService;
@@ -188,7 +189,8 @@ public class ReportServiceImpl implements ReportService {
         // If the view exists, slice and return
         Map<String, Object> viewMeta = viewCache.getMeta(userId, statementId, sig);
         if (viewMeta != null) {
-            return sliceFromView(userId, statementId, sig, startRow, endRow, ((Number) viewMeta.getOrDefault("pageSize", PAGE_SIZE)).intValue());
+            int ps = ((Number) viewMeta.getOrDefault("pageSize", PAGE_SIZE)).intValue();
+            return sliceFromView(userId, statementId, sig, startRow, endRow, ps);
         }
 
         // Build the view (first time) from base pages
@@ -325,8 +327,12 @@ public class ReportServiceImpl implements ReportService {
 
     private Map<String, Integer> indexColumns(List<String> columns) {
         Map<String, Integer> m = new HashMap<>();
-        for (int i = 0; i < (columns != null ? columns.size() : 0); i++) {
-            m.put(columns.get(i), i);
+        if (columns == null) return m;
+        for (int i = 0; i < columns.size(); i++) {
+            String c = columns.get(i);
+            if (c == null) continue;
+            m.put(c, i);                               // original case
+            m.put(c.toLowerCase(Locale.ROOT), i);      // lowercase alias
         }
         return m;
     }
@@ -362,6 +368,7 @@ public class ReportServiceImpl implements ReportService {
         for (Map.Entry<String, FilterDescriptor> e : filterModel.entrySet()) {
             String colId = e.getKey();
             Integer idx = colIndex.get(colId);
+            if (idx == null && colId != null) idx = colIndex.get(colId.toLowerCase(Locale.ROOT));
             if (idx == null || idx < 0 || idx >= row.size()) continue; // unknown column => ignore
             Object val = row.get(idx);
             if (!evalFilter(val, e.getValue())) return false;
@@ -502,7 +509,8 @@ public class ReportServiceImpl implements ReportService {
         }
         List<Comparator<List<Object>>> comparators = new ArrayList<>();
         for (SortModelEntry s : sorts) {
-            Integer idx = colIndex.get(s.getColId());
+            String key = s.getColId();
+            Integer idx = key == null ? null : colIndex.getOrDefault(key, colIndex.get(key.toLowerCase(Locale.ROOT)));
             if (idx == null) continue;
             boolean asc = s.isAsc();
             comparators.add((r1, r2) -> {
