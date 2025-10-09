@@ -405,8 +405,7 @@ export class AppComponent implements OnInit {
     p.set('startRow', String(start));
     p.set('endRow', String(end));
 
-    // Normalize to canonical empties so the backend consistently sees BOTH params.
-    // This prevents “works only when both” sequences and avoids 'null' strings.
+    // Always send both; use canonical empties to keep server behavior stable
     const sortParam   = (sortModelJson && sortModelJson !== 'null') ? sortModelJson : '[]';
     const filterParam = (filterModelJson && filterModelJson !== 'null') ? filterModelJson : '{}';
 
@@ -415,6 +414,7 @@ export class AppComponent implements OnInit {
 
     return `${BASE}?${p.toString()}`;
   }
+
 
   private async safeGet<T = any>(url: string): Promise<T> {
     return await firstValueFrom(this.http.get<T>(url));
@@ -426,7 +426,7 @@ export class AppComponent implements OnInit {
       let meta: Meta;
       try {
         meta = await firstValueFrom(
-          this.http.get<Meta>(`${BASE}/statement?statementId=${statementId}`)
+          this.http.get<Meta>(`${BASE}/meta?statementId=${statementId}`)
         );
       } catch {
         if (Date.now() - start > timeoutMs) throw new Error('Timed out waiting for statement meta.');

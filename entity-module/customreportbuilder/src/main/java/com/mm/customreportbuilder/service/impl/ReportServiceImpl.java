@@ -172,14 +172,16 @@ public class ReportServiceImpl implements ReportService {
     @Override
     public Map<String, Object> getRows(String statementId, int startRow, int endRow, String sortModelJson, String filterModelJson) {
         String userId = "local";
+        boolean sortPresentRaw   = sortModelJson != null && !sortModelJson.isBlank() && !"[]".equals(sortModelJson.trim());
+        boolean filterPresentRaw = filterModelJson != null && !filterModelJson.isBlank() && !"{}".equals(filterModelJson.trim());
 
         // Parse models; if empty => behave like base
         AgGridParsedModels parsed = AgGridModelParser.parse(sortModelJson, filterModelJson, null);
         boolean hasSort = parsed.getSortModel() != null && !parsed.getSortModel().isEmpty();
         boolean hasFilter = parsed.getFilterModel() != null && !parsed.getFilterModel().isEmpty();
 
-        if (!hasSort && !hasFilter) {
-            // No models → return base pages
+        if (!hasSort && !hasFilter && !sortPresentRaw && !filterPresentRaw) {
+            // Truly nothing requested → base
             return getRows(statementId, startRow, endRow);
         }
 
@@ -215,10 +217,18 @@ public class ReportServiceImpl implements ReportService {
         parsed = AgGridModelParser.parse(sortModelJson, filterModelJson, colIndex.keySet());
         hasSort = parsed.getSortModel() != null && !parsed.getSortModel().isEmpty();
         hasFilter = parsed.getFilterModel() != null && !parsed.getFilterModel().isEmpty();
+        // If allowlist pruned everything but the client DID ask for at least one model,
+        // proceed with base-slice BUT still honor the other side if present.
+        // (This prevents “do nothing” when only one model is valid.)
         if (!hasSort && !hasFilter) {
-            // After column validation, nothing left → base
+            if (sortPresentRaw || filterPresentRaw) {
+                // Nothing matched columns → just return base slice (explicitly)
+                return getRows(statementId, startRow, endRow);
+            }
             return getRows(statementId, startRow, endRow);
         }
+
+        log.debug("rows sig: stmt={} sortPresentRaw={} filterPresentRaw={} hasSort={} hasFilter={} cols={}", statementId, sortPresentRaw, filterPresentRaw, hasSort, hasFilter, colIndex.keySet());
 
         // 1) Read base pages, apply filters on the fly, collect into memory
         List<List<Object>> filtered = new ArrayList<>(Math.min(rowCount != null ? rowCount : 10000, 200000));

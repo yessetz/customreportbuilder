@@ -88,15 +88,14 @@ public class ViewCacheService {
         if (json == null || json.isBlank()) return null;
         try {
             Object tree = mapper.readValue(json, Object.class);
-            // If it’s an empty array/object, treat as null to avoid signature forks
+            // Treat [] / {} as empty -> null to avoid signature forks
             if ((tree instanceof java.util.List && ((java.util.List<?>) tree).isEmpty())
             || (tree instanceof java.util.Map && ((java.util.Map<?, ?>) tree).isEmpty())) {
                 return null;
             }
-            return mapper.writeValueAsString(tree); // canonicalize key order
+            return mapper.writeValueAsString(tree); // canonicalize object key order
         } catch (Exception e) {
-            // Malformed -> ignore for signature purposes
-            return null;
+            return json.trim(); // fallback
         }
     }
 
