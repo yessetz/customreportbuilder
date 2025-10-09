@@ -226,16 +226,21 @@ public class ReportServiceImpl implements ReportService {
         hasSort = parsed.getSortModel() != null && !parsed.getSortModel().isEmpty();
         hasFilter = parsed.getFilterModel() != null && !parsed.getFilterModel().isEmpty();
 
-        // If allowlist pruned everything but the client DID ask for at least one model,
-        // proceed with base-slice BUT still honor the other side if present.
-        // (This prevents “do nothing” when only one model is valid.)
-        if (!hasSort && !hasFilter) {
-            if (sortPresentRaw || filterPresentRaw) {
-                // Nothing matched columns → just return base slice (explicitly)
-                return getRows(statementId, startRow, endRow);
+        // Try to rescue filter-only: if client sent a filter but allowed-columns parsing pruned it,
+        // fall back to the RAW parse (no allow-list) so we can still evaluate it using our flexible col lookup.
+        if (!hasFilter && filterPresentRaw) {
+            AgGridParsedModels rawParsed = AgGridModelParser.parse(sortModelJson, filterModelJson, null);
+            if (rawParsed.getFilterModel() != null && !rawParsed.getFilterModel().isEmpty()) {
+                parsed = rawParsed;
+                hasFilter = true;
             }
+        }
+
+        // If after rescue we still have neither, return base.
+        if (!hasSort && !hasFilter) {
             return getRows(statementId, startRow, endRow);
         }
+
 
         log.debug("rows sig: stmt={} sortPresentRaw={} filterPresentRaw={} hasSort={} hasFilter={} cols={}", statementId, sortPresentRaw, filterPresentRaw, hasSort, hasFilter, colIndex.keySet());
 
@@ -350,8 +355,11 @@ public class ReportServiceImpl implements ReportService {
         for (int i = 0; i < columns.size(); i++) {
             String c = columns.get(i);
             if (c == null) continue;
-            m.put(c, i);                               // original case
-            m.put(c.toLowerCase(Locale.ROOT), i);      // lowercase alias
+            String lower = c.toLowerCase(Locale.ROOT);
+            String collapsed = lower.replaceAll("[^a-z0-9]", "");
+            m.put(c, i);                 // original case
+            m.put(lower, i);             // lowercase alias
+            m.put(collapsed, i);         // NEW: collapsed alias (camel/snake/spaces all match)
         }
         return m;
     }
@@ -388,6 +396,10 @@ public class ReportServiceImpl implements ReportService {
             String colId = e.getKey();
             Integer idx = colIndex.get(colId);
             if (idx == null && colId != null) idx = colIndex.get(colId.toLowerCase(Locale.ROOT));
+            if (idx == null && colId != null) {
+                String collapsed = colId.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+                idx = colIndex.get(collapsed);  // NEW: collapsed lookup
+            }
             if (idx == null || idx < 0 || idx >= row.size()) continue; // unknown column => ignore
             Object val = row.get(idx);
             if (!evalFilter(val, e.getValue())) return false;
