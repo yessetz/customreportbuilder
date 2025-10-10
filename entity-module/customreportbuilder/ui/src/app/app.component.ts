@@ -33,7 +33,7 @@ type Meta = {
 
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
         <button (click)="run()" [disabled]="loading">
-          {{ loading ? 'Running…' : 'Run SELECT 1 AS demo' }}
+          {{ loading ? 'Running…' : 'Run fact_product' }}
         </button>
 
         <button *ngIf="statementId" (click)="clearResume()" [disabled]="loading" title="Forget cached result">
@@ -89,6 +89,7 @@ type Meta = {
     </div>
   `,
 })
+
 export class AppComponent implements OnInit {
   private http = inject(HttpClient);
 
@@ -200,7 +201,7 @@ export class AppComponent implements OnInit {
       this.gridApi.purgeInfiniteCache?.();
     }
 
-    const querySQL = 'SELECT 1 AS demo';
+    const querySQL = await this.loadQuerySql('fact_product');
 
     try {
       // 1) submit
@@ -481,5 +482,11 @@ export class AppComponent implements OnInit {
     } catch {
       return String(err);
     }
+  }
+
+  private async loadQuerySql(name: string): Promise<string> {
+    return await firstValueFrom(
+      this.http.get(`/assets/queries/${name}.sql`, { responseType: 'text' })
+    );
   }
 }
