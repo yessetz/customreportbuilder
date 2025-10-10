@@ -175,13 +175,8 @@ public class ReportServiceImpl implements ReportService {
         boolean sortPresentRaw   = sortModelJson != null && !sortModelJson.isBlank() && !"[]".equals(sortModelJson.trim());
         boolean filterPresentRaw = filterModelJson != null && !filterModelJson.isBlank() && !"{}".equals(filterModelJson.trim());
 
-        // Parse models; if empty => behave like base
-        AgGridParsedModels parsed = AgGridModelParser.parse(sortModelJson, filterModelJson, null);
-        boolean hasSort = parsed.getSortModel() != null && !parsed.getSortModel().isEmpty();
-        boolean hasFilter = parsed.getFilterModel() != null && !parsed.getFilterModel().isEmpty();
-
-        if (!hasSort && !hasFilter && !sortPresentRaw && !filterPresentRaw) {
-            // Truly nothing requested → base
+        // If truly nothing requested → base
+        if (!sortPresentRaw && !filterPresentRaw) {
             return getRows(statementId, startRow, endRow);
         }
 
@@ -207,36 +202,25 @@ public class ReportServiceImpl implements ReportService {
         if (filterPresentRaw) {
             String normalized = normalizeFilterKeys(filterModelJson, colIndex.keySet());
             if (normalized != null) {
-                filterModelJson = normalized; // use normalized JSON in the allowed-columns parse and for view building
+                filterModelJson = normalized; // use normalized JSON for view building
             }
         }
 
-        // Use raw parse so we don't drop legit filters by name format;
-        // binding to actual columns is handled in rowMatchesFilters via colIndex (orig/lower/collapsed).
-        parsed = AgGridModelParser.parse(sortModelJson, filterModelJson, null);
-        hasSort = parsed.getSortModel() != null && !parsed.getSortModel().isEmpty();
-        hasFilter = parsed.getFilterModel() != null && !parsed.getFilterModel().isEmpty();
+        // Parse ONLY the sort via the parser
+        AgGridParsedModels parsedSort = AgGridModelParser.parse(sortModelJson, null, null);
+        List<SortModelEntry> sortModel = parsedSort.getSortModel();
+        boolean hasSort = sortModel != null && !sortModel.isEmpty();
 
-        // Try to rescue filter-only: if client sent a filter but allowed-columns parsing pruned it,
-        // fall back to the RAW parse (no allow-list) so we can still evaluate it using our flexible col lookup.
-        if (!hasFilter && filterPresentRaw) {
-            AgGridParsedModels rawParsed = AgGridModelParser.parse(sortModelJson, filterModelJson, null);
-            if (rawParsed.getFilterModel() != null && !rawParsed.getFilterModel().isEmpty()) {
-                parsed = rawParsed;
-                hasFilter = true;
-            }
-        }
+        // Parse the FILTER model directly (robustly) with Jackson
+        Map<String, FilterDescriptor> filterMap = parseFilterModel(filterModelJson);
+        boolean hasFilter = filterMap != null && !filterMap.isEmpty();
 
-        // Final signature & cache check (AFTER normalization/rescue & final parse)
-        final String sig = viewCache.computeSignature(
-                statementId,
-                parsed.getCanonicalSortJson(),
-                parsed.getCanonicalFilterJson()
-        );
+        // Final signature & cache check (canonicalization handled inside ViewCacheService)
+        final String sig = viewCache.computeSignature(statementId, sortModelJson, filterModelJson);
 
-        log.debug("final sort JSON:   {}", parsed.getCanonicalSortJson());
-        log.debug("final filter JSON: {}", parsed.getCanonicalFilterJson());
-        log.debug("final filter keys: {}", parsed.getFilterModel() == null ? "null" : parsed.getFilterModel().keySet());
+        log.debug("final sort JSON:   {}", sortModelJson);
+        log.debug("final filter JSON: {}", filterModelJson);
+        log.debug("final filter keys: {}", (filterMap == null ? "null" : filterMap.keySet()));
 
         Map<String, Object> viewMeta = viewCache.getMeta(userId, statementId, sig);
         if (viewMeta != null) {
@@ -244,7 +228,8 @@ public class ReportServiceImpl implements ReportService {
             return sliceFromView(userId, statementId, sig, startRow, endRow, ps);
         }
 
-        log.debug("rows sig: stmt={} sortPresentRaw={} filterPresentRaw={} hasSort={} hasFilter={} cols={}", statementId, sortPresentRaw, filterPresentRaw, hasSort, hasFilter, colIndex.keySet());
+        log.debug("rows sig: stmt={} sortPresentRaw={} filterPresentRaw={} hasSort={} hasFilter={} cols={}",
+                statementId, sortPresentRaw, filterPresentRaw, hasSort, hasFilter, colIndex.keySet());
 
         // 1) Read base pages, apply filters on the fly, collect into memory
         List<List<Object>> filtered = new ArrayList<>(Math.min(rowCount != null ? rowCount : 10000, 200000));
@@ -256,10 +241,14 @@ public class ReportServiceImpl implements ReportService {
                 if (rowCount != null && pageIdx >= maxPagesToScan - 1) break;
                 // else: keep scanning until cap
             } else {
-                // Filter rows
-                for (List<Object> row : chunk) {
-                    if (rowMatchesFilters(row, parsed.getFilterModel(), colIndex)) {
-                        filtered.add(row);
+                // Filter rows using the robustly-parsed filter map
+                if (!hasFilter) {
+                    filtered.addAll(chunk);
+                } else {
+                    for (List<Object> row : chunk) {
+                        if (rowMatchesFilters(row, filterMap, colIndex)) {
+                            filtered.add(row);
+                        }
                     }
                 }
             }
@@ -281,7 +270,7 @@ public class ReportServiceImpl implements ReportService {
 
         // 2) Sort if needed
         if (hasSort) {
-            Comparator<List<Object>> cmp = buildComparator(parsed.getSortModel(), colIndex);
+            Comparator<List<Object>> cmp = buildComparator(sortModel, colIndex);
             filtered.sort(cmp);
         }
 
@@ -625,6 +614,20 @@ public class ReportServiceImpl implements ReportService {
             return mapper.writeValueAsString(normalized);
         } catch (Exception ignore) {
             return null; // fall back gracefully
+        }
+    }
+
+    // Parse filter JSON directly to avoid the parser dropping valid filters when sort is absent.
+    private Map<String, FilterDescriptor> parseFilterModel(String json) {
+        if (json == null || json.isBlank() || "{}".equals(json.trim())) return java.util.Collections.emptyMap();
+        try {
+            var mapper  = new com.fasterxml.jackson.databind.ObjectMapper();
+            var typeRef = new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, FilterDescriptor>>() {};
+            Map<String, FilterDescriptor> m = mapper.readValue(json, typeRef);
+            return (m == null) ? java.util.Collections.emptyMap() : m;
+        } catch (Exception e) {
+            log.warn("parseFilterModel: failed to parse filter JSON; ignoring. {}", e.toString());
+            return java.util.Collections.emptyMap();
         }
     }
 }
