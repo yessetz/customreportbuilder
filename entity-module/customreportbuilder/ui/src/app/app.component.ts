@@ -1,4 +1,5 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
+import { CommonModule } from '@angular/common';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { AgGridAngular } from 'ag-grid-angular';
@@ -10,6 +11,8 @@ import type {
   IGetRowsParams,
 } from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
+import { compileTemplate, sqlString } from './lib/query-compiler';
+import { ReportQueryService } from './services/report-query.service';
 
 const BASE = '/api/reports'; // no trailing slash
 const STORAGE_KEY = 'crb:lastStatementId';
@@ -26,7 +29,7 @@ type Meta = {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [AgGridAngular],
+  imports: [CommonModule, AgGridAngular],
   template: `
     <div style="padding:12px; position: relative;">
       <h3>Databricks → Redis → API → Grid (infinite + prefetch)</h3>
@@ -91,7 +94,10 @@ type Meta = {
 })
 
 export class AppComponent implements OnInit {
-  private http = inject(HttpClient);
+  constructor(
+    private http: HttpClient,
+    private reportQuery: ReportQueryService
+ ) {}
 
   theme = themeQuartz;
   loading = false;
@@ -201,7 +207,7 @@ export class AppComponent implements OnInit {
       this.gridApi.purgeInfiniteCache?.();
     }
 
-    const querySQL = await this.loadQuerySql('fact_product');
+    const querySQL = await this.reportQuery.compileQuery('fact_product');
 
     try {
       // 1) submit
