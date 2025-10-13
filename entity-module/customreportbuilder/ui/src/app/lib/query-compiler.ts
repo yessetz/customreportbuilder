@@ -31,13 +31,15 @@ export function compileTemplate(baseSql: string, parts: QueryParts): string {
     return false;
   };
 
-  // JOINS
+
+
+  // JOINS (replace your current fallback block)
   for (const j of parts.joins ?? []) {
     if (!injectByMarker('JOIN', j.key, j.sql)) {
-      // Fallback: insert before WHERE if no explicit marker for that key
-      const whereIdx = sql.toUpperCase().indexOf('\nWHERE ');
-      if (whereIdx > -1) {
-        sql = `${sql.slice(0, whereIdx)}\n${j.sql}\n${sql.slice(whereIdx)}`;
+      const m = /\bWHERE\b/i.exec(sql);
+      if (m) {
+        // insert the JOIN on its own line right before WHERE
+        sql = `${sql.slice(0, m.index)}\n${j.sql}\n${sql.slice(m.index)}`;
       } else {
         sql = `${sql.trimEnd()}\n${j.sql}\n`;
       }
@@ -45,6 +47,14 @@ export function compileTemplate(baseSql: string, parts: QueryParts): string {
   }
 
   // WHEREs
+  function ensureWhereIfNeeded(sql: string): string {
+  // If there is no WHERE but we have a line starting with AND, insert WHERE 1=1 before the first AND
+    if (!/\bWHERE\b/i.test(sql) && /(^|\n)\s*AND\b/i.test(sql)) {
+        return sql.replace(/(^|\n)\s*AND\b/i, '\nWHERE 1=1\n  AND');
+    }
+    return sql;
+  }
+  
   const groupedWheres: Record<string, string[]> = {};
   for (const w of parts.wheres ?? []) {
     groupedWheres[w.key] = groupedWheres[w.key] || [];
@@ -52,17 +62,30 @@ export function compileTemplate(baseSql: string, parts: QueryParts): string {
   }
   for (const [key, arr] of Object.entries(groupedWheres)) {
     const combined = arr.filter(Boolean).map(s => `  AND ${s}`).join('\n');
+
     if (!injectByMarker('WHERE', key, combined)) {
-      // Fallback: append to first WHERE
-      const m = /\bWHERE\b/i.exec(sql);
-      if (m) {
-        const idx = m.index + m[0].length;
-        sql = `${sql.slice(0, idx)}\n${combined}\n${sql.slice(idx)}`;
+      // Fallback: prefer inserting AFTER "WHERE 1=1"
+      if (/\bWHERE\b\s*1\s*=\s*1/i.test(sql)) {
+        sql = ensureWhereIfNeeded(sql);
       } else {
-        sql = `${sql.trimEnd()}\nWHERE 1=1\n${combined}\n`;
+        // Otherwise insert right after WHERE line (if any)
+        const m = /\bWHERE\b/i.exec(sql);
+        if (m) {
+          const idx = m.index + m[0].length;
+          sql = `${sql.slice(0, idx)}\n${combined}\n${sql.slice(idx)}`;
+        } else {
+          // No WHERE at all → create one
+          sql = `${sql.trimEnd()}\nWHERE 1=1\n${combined}\n`;
+        }
       }
     }
   }
+
+  // Tidy common edge cases like "WHERE\nAND ..."
+  sql = sql
+    .replace(/\bWHERE\s*\n\s*AND\b/gi, 'WHERE') // WHERE + first AND on same line
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n');
 
   // GROUP BY
   if (parts.groupBy?.length) {
