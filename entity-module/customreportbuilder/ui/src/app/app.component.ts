@@ -13,6 +13,7 @@ import type {
 import { themeQuartz } from 'ag-grid-community';
 import { compileTemplate, sqlString } from './lib/query-compiler';
 import { ReportQueryService } from './services/report-query.service';
+import { DimBarComponent } from './components/dim-bar/dim-bar.component';
 
 const BASE = '/api/reports'; // no trailing slash
 const STORAGE_KEY = 'crb:lastStatementId';
@@ -29,12 +30,13 @@ type Meta = {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, AgGridAngular],
+  imports: [CommonModule, AgGridAngular, DimBarComponent],
   template: `
     <div style="padding:12px; position: relative;">
       <h3>Databricks → Redis → API → Grid (infinite + prefetch)</h3>
 
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <app-dim-bar></app-dim-bar>
         <button (click)="run()" [disabled]="loading">
           {{ loading ? 'Running…' : 'Run fact_product' }}
         </button>
