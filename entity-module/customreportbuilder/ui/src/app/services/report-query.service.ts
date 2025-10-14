@@ -7,6 +7,7 @@ export interface ProductFilters {
   dateFrom?: string | null;
   dateTo?: string | null;
   categoryId?: string | null;
+  brandIds?: string[] | null;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -45,6 +46,26 @@ export class ReportQueryService {
         key: 'category_id',
         sql: `c.category_id = ${sqlString(f.categoryId)}`
       });
+    }
+
+    // BRAND multi-select: join + IN (...)
+    if (Array.isArray(f.brandIds) && f.brandIds.length > 0) {
+      // Optional join (only when filtering by brand)
+      const joins = [{ 
+        key: 'brand', 
+        sql: 'LEFT JOIN analytics.mm.dim_brand AS b ON b.brand_id = p.brand_id' 
+      }];
+
+      // WHERE brand_id IN (...)
+      const ids = f.brandIds.map(id => sqlString(id)).join(', ');
+      wheres.push({
+        key: 'brand_id',
+        sql: `b.brand_id IN (${ids})`
+      });
+
+      // pass joins into compileTemplate:
+      const compiled = compileTemplate(baseSql, { joins, wheres });
+      return compiled;
     }
 
     const compiled = compileTemplate(baseSql, {
