@@ -32,15 +32,19 @@ export class ReportQueryService {
       this.http.get(`/assets/queries/${name}.sql`, { responseType: 'text' })
     );
 
-    const wheres: { key: string; sql: string }[] = [];
     const f = this.filters;
+    const wheres: { key: string; sql: string }[] = [];
+    const joins: { key: string; sql: string }[] = []; // keep empty; join already in template
 
+    // Date range (end exclusive)
     if (f.dateFrom && f.dateTo) {
       wheres.push({
         key: 'date_range',
         sql: `p.created_at >= DATE ${sqlString(f.dateFrom)} AND p.created_at < DATE ${sqlString(this.nextDay(f.dateTo))}`
       });
     }
+
+    // Category
     if (f.categoryId) {
       wheres.push({
         key: 'category_id',
@@ -48,34 +52,18 @@ export class ReportQueryService {
       });
     }
 
-    // BRAND multi-select: join + IN (...)
+    // Brand (multi-select) -> IN (...)
     if (Array.isArray(f.brandIds) && f.brandIds.length > 0) {
-      // Optional join (only when filtering by brand)
-      const joins = [{ 
-        key: 'brand', 
-        sql: 'LEFT JOIN analytics.mm.dim_brand AS b ON b.brand_id = p.brand_id' 
-      }];
-
-      // WHERE brand_id IN (...)
-      const ids = f.brandIds.map(id => sqlString(id)).join(', ');
+      const ids = f.brandIds.map(sqlString).join(', ');
       wheres.push({
         key: 'brand_id',
         sql: `b.brand_id IN (${ids})`
       });
-
-      // pass joins into compileTemplate:
-      const compiled = compileTemplate(baseSql, { joins, wheres });
-      return compiled;
     }
-
-    const compiled = compileTemplate(baseSql, {
-      joins: [],     // add future joins here, e.g., brand, vendor, etc.
-      wheres,
-      // orderBy: ['p.created_at DESC'],
-      // limit: 1000,
-    });
-
-    return compiled;
+    
+    const finalSql = compileTemplate(baseSql, { joins, wheres });
+    // console.log('[compiled SQL]\n', finalSql);
+    return finalSql;
   }
 
   private nextDay(iso: string): string {

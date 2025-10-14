@@ -38,31 +38,34 @@ type Brand = { id: string; name: string };
       </div>
 
       <!-- Brand (multi-select) -->
-      <div style="display:flex; gap:6px; align-items:end;">
-        <label style="display:flex; flex-direction:column; font-size:12px;">
-          Brand (multi)
-          <select multiple [size]="Math.min(8, brands.length || 8)"
-                  (change)="onBrandChange($event)">
-            <option *ngFor="let b of brands" [value]="b.id">{{ b.name }}</option>
-          </select>
-        </label>
-      </div>
+      <label style="display:flex; flex-direction:column; font-size:12px;">
+        Brand (multi)
+        <select multiple [size]="brandListSize" (change)="onBrandChange($event)">
+          <option *ngFor="let b of brands" [value]="b.id" [selected]="brandIds.includes(b.id)">
+            {{ b.name }}
+          </option>
+        </select>
+      </label>
 
       <!-- Reset -->
       <button (click)="reset()" style="height:32px;">Reset filters</button>
     </div>
   `,
 })
-
 export class DimBarComponent implements OnInit {
   categories: Category[] = [];
   brands: Brand[] = [];
-  brandIds: string[] = [];  
+  brandIds: string[] = [];
 
   // Local state (not stored in app.component)
   dateFrom: string | null = null; // ISO yyyy-mm-dd
   dateTo:   string | null = null;
   categoryId: string | null = null;
+
+  // computed size for the multi-select
+  get brandListSize(): number {
+    return Math.min(8, this.brands.length || 8);
+  }
 
   constructor(
     private http: HttpClient,
@@ -88,9 +91,8 @@ export class DimBarComponent implements OnInit {
       dateFrom: this.dateFrom || null,
       dateTo: this.dateTo || null,
       categoryId: this.categoryId || null,
-      brandIds: this.brandIds.length ? this.brandIds : null,   // <-- NEW
+      brandIds: this.brandIds.length ? this.brandIds : null,
     });
-    // No auto-run: user will click "Run fact_product"
   }
 
   reset() {
@@ -103,9 +105,7 @@ export class DimBarComponent implements OnInit {
 
   onBrandChange(evt: Event) {
     const el = evt.target as HTMLSelectElement;
-    const selected = Array.from(el.selectedOptions).map(o => o.value);
-    this.brandIds = selected;
+    this.brandIds = Array.from(el.selectedOptions).map(o => o.value);
     this.apply();
   }
-
 }
