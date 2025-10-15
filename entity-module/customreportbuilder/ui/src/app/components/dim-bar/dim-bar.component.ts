@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ReportQueryService } from '../../services/report-query.service';
+import { DimsDataService } from '../../services/dims-data.service';
 
 type Category = { id: string; name: string };
 type Brand = { id: string; name: string };
@@ -69,21 +70,18 @@ export class DimBarComponent implements OnInit {
 
   constructor(
     private http: HttpClient,
-    private reportQuery: ReportQueryService
+    private reportQuery: ReportQueryService,
+    private dims: DimsDataService
   ) {}
+
 
   async ngOnInit() {
     try {
-      this.categories = await firstValueFrom(
-        this.http.get<Category[]>('/assets/dims/categories.json')
-      );
-      this.brands = await firstValueFrom(
-        this.http.get<Brand[]>('/assets/dims/brands.json')
-      );
-    } catch {
-      this.categories = [];
-      this.brands = [];
-    }
+      this.categories = await this.dims.loadCategories();
+    } catch { this.categories = []; }
+    try {
+      this.brands = await this.dims.loadBrands();
+    } catch { this.brands = []; }
   }
 
   apply() {
