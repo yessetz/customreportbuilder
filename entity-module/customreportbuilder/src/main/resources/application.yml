@@ -25,3 +25,12 @@ cache:
 logging:
   level:
     com.mm.customreportbuilder.databricks: DEBUG
+
+app:
+  dims:
+    categories:
+      path: classpath:sql/dims/categories.sql
+      ttlSeconds: 900
+    brands:
+      path: classpath:sql/dims/brands.sql
+      ttlSeconds: 900

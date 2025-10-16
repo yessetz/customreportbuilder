@@ -11,13 +11,15 @@ export class DimsDataService {
   constructor(private http: HttpClient) {}
 
   async loadCategories(): Promise<DimItem[]> {
-    const sql = await this.readAsset('/assets/queries/dims/categories.sql');
-    return await this.runSmallQuery(sql);
+    // const sql = await this.readAsset('/assets/queries/dims/categories.sql');
+    // return await this.runSmallQuery(sql);
+    return await firstValueFrom(this.http.get<DimItem[]>('/api/dims/categories'));
   }
 
   async loadBrands(): Promise<DimItem[]> {
-    const sql = await this.readAsset('/assets/queries/dims/brands.sql');
-    return await this.runSmallQuery(sql);
+    // const sql = await this.readAsset('/assets/queries/dims/brands.sql');
+    // return await this.runSmallQuery(sql);
+    return await firstValueFrom(this.http.get<DimItem[]>('/api/dims/brands'));
   }
 
   // ----- helpers -----
