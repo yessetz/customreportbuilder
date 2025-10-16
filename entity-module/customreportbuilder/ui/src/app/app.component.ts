@@ -55,6 +55,10 @@ type Meta = {
         <pre>{{ statementId }}</pre>
       </div>
 
+      <button (click)="exportCsv()" [disabled]="!statementId || loading" title="Download full result as CSV">
+        Export CSV
+      </button>
+
       <div *ngIf="meta" style="margin:12px 0;">
         <strong>meta</strong>
         <pre>{{ meta | json }}</pre>
@@ -191,6 +195,14 @@ export class AppComponent implements OnInit {
     this.gridApi?.purgeInfiniteCache?.();
 
     this.showToast('Applying filter…', 900);
+  }
+
+  exportCsv() {
+    if (!this.statementId) return;
+    // Stream directly from the backend (no memory pressure in Angular)
+    const url = `${BASE}/export/csv?statementId=${encodeURIComponent(this.statementId)}&header=true&bom=true`;
+    window.open(url, '_blank');   // triggers a file download in a new tab
+    this.showToast?.('CSV export started', 1200);
   }
 
   async run() {
