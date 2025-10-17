@@ -200,8 +200,15 @@ export class AppComponent implements OnInit {
   exportCsv() {
     if (!this.statementId) return;
     // Stream directly from the backend (no memory pressure in Angular)
-    const url = `${BASE}/export/csv?statementId=${encodeURIComponent(this.statementId)}&header=true&bom=true`;
-    window.open(url, '_blank');   // triggers a file download in a new tab
+    // const url = `${BASE}/export/csv?statementId=${encodeURIComponent(this.statementId)}&header=true&bom=true`;
+    // window.open(url, '_blank');   // triggers a file download in a new tab
+    const filterModel = JSON.stringify(this.gridApi?.getFilterModel?.() ?? {});
+    const params = new URLSearchParams();
+    params.set('statementId', this.statementId);
+    params.set('header', 'true');
+    params.set('bom', 'true');
+    if (filterModel !== '{}') params.set('filterModel', filterModel);
+    window.open(`${BASE}/export/csv?${params.toString()}`, '_blank');
     this.showToast?.('CSV export started', 1200);
   }
 
