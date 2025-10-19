@@ -29,7 +29,8 @@ export class ReportQueryService {
   /** Loads the base SQL and compiles it with current filters. */
   async compileQuery(name: string): Promise<string> {
     const baseSql = await firstValueFrom(
-      this.http.get(`/assets/queries/${name}.sql`, { responseType: 'text' })
+      // this.http.get(`/assets/queries/${name}.sql`, { responseType: 'text' })
+      this.http.get(`/api/facts/${name}.sql`, { responseType: 'text' })
     );
 
     const f = this.filters;

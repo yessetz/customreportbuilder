@@ -4,5 +4,5 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
-@EnableConfigurationProperties(DimsProperties.class)
+@EnableConfigurationProperties({ FactsProperties.class, DimsProperties.class })
 public class AppConfig {}

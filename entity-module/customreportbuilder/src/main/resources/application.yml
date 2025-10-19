@@ -27,6 +27,9 @@ logging:
     com.mm.customreportbuilder.databricks: DEBUG
 
 app:
+  facts:
+    fact_product:
+      path: classpath:sql/facts/fact_product.sql
   dims:
     categories:
       path: classpath:sql/dims/categories.sql
