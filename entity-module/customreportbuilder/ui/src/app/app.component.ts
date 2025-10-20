@@ -232,10 +232,7 @@ export class AppComponent implements OnInit {
 
     try {
       // 1) submit
-      const submit = await firstValueFrom(
-        this.http.post<{ statementId: string }>(`${BASE}/statement`, { sql: querySQL })
-      );
-      this.statementId = submit.statementId;
+      this.statementId = await this.reportQuery.startFactServerCompiled('fact_product');
       localStorage.setItem(STORAGE_KEY, this.statementId);
 
       // 2) poll meta

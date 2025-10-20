@@ -72,4 +72,33 @@ export class ReportQueryService {
     d.setUTCDate(d.getUTCDate() + 1);
     return d.toISOString().slice(0, 10);
   }
+
+  async startFactServerCompiled(name: string): Promise<string> {
+    // Build parts exactly like you do now for compileTemplate(...)
+    const f = this.filters;
+
+    const wheres: { key: string; sql: string }[] = [];
+
+    if (f.dateFrom && f.dateTo) {
+      wheres.push({
+        key: 'date_range',
+        sql: `p.created_at >= DATE ${sqlString(f.dateFrom)} AND p.created_at < DATE ${sqlString(this.nextDay(f.dateTo))}`
+      });
+    }
+    if (f.categoryId) {
+      wheres.push({ key: 'category_id', sql: `c.category_id = ${sqlString(f.categoryId)}` });
+    }
+    if (Array.isArray(f.brandIds) && f.brandIds.length > 0) {
+      const ids = Array.from(new Set(f.brandIds)).map(sqlString).join(', ');
+      wheres.push({ key: 'brand_id', sql: `b.brand_id IN (${ids})` });
+    }
+
+    const parts = { joins: [], wheres }; // add groupBy/having/orderBy/limit if you use them
+
+    const body = { kind: 'fact', name, parts };
+    const res = await firstValueFrom(
+      this.http.post<{ statementId: string }>(`/api/reports/statementByTemplate`, body)
+    );
+    return res.statementId;
+  }
 }
