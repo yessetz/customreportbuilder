@@ -1,4 +1,5 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
+import { CommonModule } from '@angular/common';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { AgGridAngular } from 'ag-grid-angular';
@@ -10,6 +11,9 @@ import type {
   IGetRowsParams,
 } from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
+import { compileTemplate, sqlString } from './lib/query-compiler';
+import { ReportQueryService } from './services/report-query.service';
+import { DimBarComponent } from './components/dim-bar/dim-bar.component';
 
 const BASE = '/api/reports'; // no trailing slash
 const STORAGE_KEY = 'crb:lastStatementId';
@@ -26,14 +30,15 @@ type Meta = {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [AgGridAngular],
+  imports: [CommonModule, AgGridAngular, DimBarComponent],
   template: `
     <div style="padding:12px; position: relative;">
       <h3>Databricks → Redis → API → Grid (infinite + prefetch)</h3>
 
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <app-dim-bar></app-dim-bar>
         <button (click)="run()" [disabled]="loading">
-          {{ loading ? 'Running…' : 'Run SELECT 1 AS demo' }}
+          {{ loading ? 'Running…' : 'Run fact_product' }}
         </button>
 
         <button *ngIf="statementId" (click)="clearResume()" [disabled]="loading" title="Forget cached result">
@@ -49,6 +54,10 @@ type Meta = {
         <strong>statementId</strong>
         <pre>{{ statementId }}</pre>
       </div>
+
+      <button (click)="exportCsv()" [disabled]="!statementId || loading" title="Download full result as CSV">
+        Export CSV
+      </button>
 
       <div *ngIf="meta" style="margin:12px 0;">
         <strong>meta</strong>
@@ -89,8 +98,12 @@ type Meta = {
     </div>
   `,
 })
+
 export class AppComponent implements OnInit {
-  private http = inject(HttpClient);
+  constructor(
+    private http: HttpClient,
+    private reportQuery: ReportQueryService
+ ) {}
 
   theme = themeQuartz;
   loading = false;
@@ -184,6 +197,21 @@ export class AppComponent implements OnInit {
     this.showToast('Applying filter…', 900);
   }
 
+  exportCsv() {
+    if (!this.statementId) return;
+    // Stream directly from the backend (no memory pressure in Angular)
+    // const url = `${BASE}/export/csv?statementId=${encodeURIComponent(this.statementId)}&header=true&bom=true`;
+    // window.open(url, '_blank');   // triggers a file download in a new tab
+    const filterModel = JSON.stringify(this.gridApi?.getFilterModel?.() ?? {});
+    const params = new URLSearchParams();
+    params.set('statementId', this.statementId);
+    params.set('header', 'true');
+    params.set('bom', 'true');
+    if (filterModel !== '{}') params.set('filterModel', filterModel);
+    window.open(`${BASE}/export/csv?${params.toString()}`, '_blank');
+    this.showToast?.('CSV export started', 1200);
+  }
+
   async run() {
     this.loading = true;
     this.error = '';
@@ -200,14 +228,11 @@ export class AppComponent implements OnInit {
       this.gridApi.purgeInfiniteCache?.();
     }
 
-    const querySQL = 'SELECT 1 AS demo';
+    const querySQL = await this.reportQuery.compileQuery('fact_product');
 
     try {
       // 1) submit
-      const submit = await firstValueFrom(
-        this.http.post<{ statementId: string }>(`${BASE}/statement`, { sql: querySQL })
-      );
-      this.statementId = submit.statementId;
+      this.statementId = await this.reportQuery.startFactServerCompiled('fact_product');
       localStorage.setItem(STORAGE_KEY, this.statementId);
 
       // 2) poll meta
@@ -481,5 +506,11 @@ export class AppComponent implements OnInit {
     } catch {
       return String(err);
     }
+  }
+
+  private async loadQuerySql(name: string): Promise<string> {
+    return await firstValueFrom(
+      this.http.get(`/assets/queries/${name}.sql`, { responseType: 'text' })
+    );
   }
 }
