@@ -1,14 +1,27 @@
 package com.mm.customreportbuilder.api;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.ControllerAdvice;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 
 @ControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleRse(ResponseStatusException ex) {
+        int status = ex.getStatus().value(); // Boot 2.x
+        return ResponseEntity
+            .status(status)
+            .body(Map.of(
+                "error", ex.getReason() != null ? ex.getReason() : "Request failed",
+                "status", status
+            ));
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
