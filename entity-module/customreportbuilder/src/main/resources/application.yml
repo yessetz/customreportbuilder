@@ -37,3 +37,5 @@ app:
     brands:
       path: classpath:sql/dims/brands.sql
       ttlSeconds: 900
+    security:
+      allowed-schemas: analytics.mm., hive_metastore.

@@ -14,6 +14,7 @@ import { themeQuartz } from 'ag-grid-community';
 import { compileTemplate, sqlString } from './lib/query-compiler';
 import { ReportQueryService } from './services/report-query.service';
 import { DimBarComponent } from './components/dim-bar/dim-bar.component';
+import { FormsModule } from '@angular/forms';
 
 const BASE = '/api/reports'; // no trailing slash
 const STORAGE_KEY = 'crb:lastStatementId';
@@ -30,15 +31,30 @@ type Meta = {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, AgGridAngular, DimBarComponent],
+  imports: [CommonModule, FormsModule, AgGridAngular, DimBarComponent],
   template: `
     <div style="padding:12px; position: relative;">
       <h3>Databricks → Redis → API → Grid (infinite + prefetch)</h3>
 
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-        <app-dim-bar></app-dim-bar>
+        <!-- dataset kind -->
+        <label style="font-size:13px;">Kind:</label>
+        <select [(ngModel)]="datasetKind" (change)="datasetName = (datasetKind === 'fact' ? availableFacts[0] : availableDims[0]) || ''">
+          <option value="fact">fact</option>
+          <option value="dim">dim</option>
+        </select>
+
+        <!-- dataset name -->
+        <label style="font-size:13px;">Name:</label>
+        <select [(ngModel)]="datasetName">
+          <option *ngFor="let n of (datasetKind === 'fact' ? availableFacts : availableDims)" [value]="n">{{ n }}</option>
+        </select>
+
+        <!-- filters for fact_product only -->
+        <app-dim-bar *ngIf="datasetKind==='fact' && datasetName==='fact_product'"></app-dim-bar>
+
         <button (click)="run()" [disabled]="loading">
-          {{ loading ? 'Running…' : 'Run fact_product' }}
+          {{ loading ? 'Running…' : ('Run ' + datasetName) }}
         </button>
 
         <button *ngIf="statementId" (click)="clearResume()" [disabled]="loading" title="Forget cached result">
@@ -111,6 +127,12 @@ export class AppComponent implements OnInit {
   statementId: string | null = null;
   meta: Meta | null = null;
 
+  datasetKind: 'fact' | 'dim' = 'fact';
+  datasetName: string = 'fact_product';
+  availableFacts: string[] = [];
+  availableDims: string[] = [];
+  private static STORAGE_DATASET = 'crb.dataset';
+
   // AG Grid
   private gridApi: GridApi | null = null;
   private _lastModelSig: string | null = null; // for debug
@@ -136,6 +158,28 @@ export class AppComponent implements OnInit {
 
   // ---------- Lifecycle: resume on reload ----------
   async ngOnInit() {
+    const saved = localStorage.getItem(AppComponent.STORAGE_DATASET);
+    if (saved) {
+      try {
+        const { kind, name } = JSON.parse(saved);
+        if (kind === 'fact' || kind === 'dim') this.datasetKind = kind;
+        if (typeof name === 'string' && name) this.datasetName = name;
+      } catch {}
+    }
+    // fetch available items
+    try {
+      [this.availableFacts, this.availableDims] = await Promise.all([
+        this.reportQuery.listFacts(), this.reportQuery.listDims()
+      ]);
+      // ensure selected name is valid
+      const pool = this.datasetKind === 'fact' ? this.availableFacts : this.availableDims;
+      if (!pool.includes(this.datasetName)) {
+        this.datasetName = pool[0] ?? this.datasetName;
+      }
+    } catch (e) {
+      console.warn('Failed to load dataset catalogs', e);
+    }
+
     const last = localStorage.getItem(STORAGE_KEY);
     if (!last) return;
 
@@ -213,26 +257,23 @@ export class AppComponent implements OnInit {
   }
 
   async run() {
-    this.loading = true;
     this.error = '';
-    this.debugResponse = null;
-
-    // Reset all caches
-    this.prefetchCache.clear();
-    this.pendingPrefetches.clear();
-
-    // Reset grid
-    if (this.gridApi) {
-      const emptyDs: IDatasource = { getRows: (p: IGetRowsParams) => p.successCallback([], 0) };
-      this.gridApi.setGridOption('datasource', emptyDs);
-      this.gridApi.purgeInfiniteCache?.();
-    }
-
-    const querySQL = await this.reportQuery.compileQuery('fact_product');
+    this.loading = true;
+    this.prefetchCache.clear(); this.pendingPrefetches.clear();
 
     try {
-      // 1) submit
-      this.statementId = await this.reportQuery.startFactServerCompiled('fact_product');
+      // persist selection
+      localStorage.setItem(
+        AppComponent.STORAGE_DATASET, 
+        JSON.stringify({ kind: this.datasetKind, name: this.datasetName })
+      );
+
+      // 1) submit (use specialized filters only for fact_product)
+      if (this.datasetKind === 'fact' && this.datasetName === 'fact_product') {
+        this.statementId = await this.reportQuery.startFactServerCompiled('fact_product');
+      } else {
+        this.statementId = await this.reportQuery.startByTemplate(this.datasetKind, this.datasetName);
+      }
       localStorage.setItem(STORAGE_KEY, this.statementId);
 
       // 2) poll meta
@@ -241,14 +282,12 @@ export class AppComponent implements OnInit {
       // 3) columns + block size from meta
       this.setupColumnsFromMeta();
       this.cacheBlockSize = this.meta?.pageSize ?? 500;
-
-      // 4) datasource
       if (this.gridApi) {
         this.gridApi.setGridOption('cacheBlockSize', this.cacheBlockSize);
         this.gridApi.setGridOption('datasource', this.createDatasource());
       }
 
-      this.showToast('Query started');
+      this.showToast(`Query started: ${this.datasetKind}/${this.datasetName}`);
     } catch (err) {
       this.error = this.normalizeHttpError(err);
       console.error('run() failed:', err);

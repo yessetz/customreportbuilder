@@ -101,4 +101,21 @@ export class ReportQueryService {
     );
     return res.statementId;
   }
+
+  // fetch registries
+  async listFacts(): Promise<string[]> {
+    return await firstValueFrom(this.http.get<string[]>('/api/facts'));
+  }
+  async listDims(): Promise<string[]> {
+    return await firstValueFrom(this.http.get<string[]>('/api/dims'));
+  }
+
+  // generic compile/run on the server for any fact/dim
+  async startByTemplate(kind: 'fact' | 'dim', name: string, parts?: any): Promise<string> {
+    const body = { kind, name, parts: parts ?? { joins: [], wheres: [] } };
+    const res = await firstValueFrom(
+      this.http.post<{ statementId: string }>(`/api/reports/statementByTemplate`, body)
+    );
+    return res.statementId;
+  }
 }
